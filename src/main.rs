@@ -911,7 +911,7 @@ struct Add {
     names: Vec<String>, // demandeurs deja saisis, du plus frequent au moins frequent
 }
 
-const ADD_SIZE: [f32; 2] = [560.0, 268.0];
+const ADD_SIZE: [f32; 2] = [560.0, 304.0];
 const CAL_HEIGHT: f32 = 330.0;
 
 /// Personnes deja saisies (demandeurs et "en attente de"), de la plus frequente a la moins frequente.
@@ -1133,16 +1133,17 @@ impl Add {
                     };
                     ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(ADD_SIZE[0], h)));
                 }
-                ui.add(
-                    TextEdit::singleline(&mut self.tags)
-                        .hint_text(hint("Tags, séparés par des virgules"))
-                        .margin(vec2(10.0, 5.0))
-                        .desired_width(f32::INFINITY),
-                );
             });
             if let Some(n) = name_chips(&mut ui, &self.names, &self.from) {
                 self.from = n;
             }
+            ui.add_space(2.0);
+            ui.add(
+                TextEdit::singleline(&mut self.tags)
+                    .hint_text(hint("Tags, séparés par des virgules"))
+                    .margin(vec2(10.0, 5.0))
+                    .desired_width(f32::INFINITY),
+            );
             tag_chips(&mut ui, &self.tags_all, &mut self.tags);
             if let Some(view) = &mut self.cal_view {
                 ui.add_space(4.0);
