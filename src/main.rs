@@ -949,6 +949,53 @@ fn name_chips(ui: &mut egui::Ui, names: &[String], typed: &str) -> Option<String
     pick
 }
 
+/// Suffixe qui completerait `text` (ou son dernier segment apres virgule si `multi`)
+/// avec le premier candidat qui commence pareil (insensible a la casse).
+fn completion(text: &str, candidates: &[String], multi: bool) -> Option<String> {
+    let seg = if multi { text.rsplit(',').next().unwrap_or("") } else { text }.trim_start();
+    if seg.is_empty() {
+        return None;
+    }
+    let low = seg.to_lowercase();
+    candidates
+        .iter()
+        .find(|c| c.to_lowercase().starts_with(&low) && c.to_lowercase() != low)
+        .map(|c| c.chars().skip(seg.chars().count()).collect())
+}
+
+/// Champ texte avec completion fantome: le suffixe propose s'affiche en grise apres la saisie,
+/// Tab l'accepte. Sans proposition, Tab garde son role (champ suivant).
+fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32, candidates: &[String], multi: bool) -> egui::Response {
+    let id = Id::new("complete").with(hint_s);
+    // Tab n'est intercepte (et insere '\t') que si le tour precedent avait une proposition.
+    let had = ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let out = TextEdit::singleline(text)
+        .hint_text(hint(hint_s))
+        .margin(vec2(10.0, 5.0))
+        .desired_width(width)
+        .lock_focus(had)
+        .show(ui);
+    let tab = text.contains('\t');
+    if tab {
+        text.retain(|c| c != '\t');
+    }
+    let sugg = completion(text, candidates, multi);
+    if tab && let Some(suf) = &sugg {
+        text.push_str(suf);
+    }
+    let sugg = if tab { None } else { sugg };
+    if out.response.has_focus()
+        && let Some(suf) = &sugg
+    {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let at = out.galley_pos + vec2(out.galley.size().x, 0.0);
+        ui.painter()
+            .text(at, Align2::LEFT_TOP, format!("{suf}   Tab"), font, DIM.lerp_to_gamma(MUTED, 0.5));
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, sugg.is_some() && out.response.has_focus()));
+    out.response
+}
+
 /// "rh, Support N2, #mira" -> ["rh", "Support N2", "mira"], sans doublon (insensible a la casse).
 fn parse_tags(s: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -1091,12 +1138,7 @@ impl Add {
             }
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                ui.add(
-                    TextEdit::singleline(&mut self.from)
-                        .hint_text(hint("Demandé par"))
-                        .margin(vec2(10.0, 5.0))
-                        .desired_width(190.0),
-                );
+                complete_field(ui, &mut self.from, "Demandé par", 190.0, &self.names, false);
                 let mut e = TextEdit::singleline(&mut self.deadline)
                     .hint_text(hint("Échéance  JJ/MM/AAAA"))
                     .margin(vec2(10.0, 5.0))
@@ -1138,11 +1180,14 @@ impl Add {
                 self.from = n;
             }
             ui.add_space(2.0);
-            ui.add(
-                TextEdit::singleline(&mut self.tags)
-                    .hint_text(hint("Tags, séparés par des virgules"))
-                    .margin(vec2(10.0, 5.0))
-                    .desired_width(f32::INFINITY),
+            let tag_names: Vec<String> = self.tags_all.iter().map(|(t, _)| t.clone()).collect();
+            complete_field(
+                &mut ui,
+                &mut self.tags,
+                "Tags, séparés par des virgules",
+                f32::INFINITY,
+                &tag_names,
+                true,
             );
             tag_chips(&mut ui, &self.tags_all, &mut self.tags);
             if let Some(view) = &mut self.cal_view {
@@ -1749,15 +1794,8 @@ fn card(
             let mut tags_text = t.tags.join(", ");
             ui.horizontal(|ui| {
                 ui.label(RichText::new("tags").size(12.5).color(MUTED));
-                if ui
-                    .add(
-                        TextEdit::singleline(&mut tags_text)
-                            .hint_text(hint("rh, support n2…"))
-                            .margin(vec2(10.0, 4.0))
-                            .desired_width(260.0),
-                    )
-                    .changed()
-                {
+                let tag_names: Vec<String> = tags_all.iter().map(|(t, _)| t.clone()).collect();
+                if complete_field(ui, &mut tags_text, "rh, support n2…", 260.0, &tag_names, true).changed() {
                     t.tags = parse_tags(&tags_text);
                     out.changed = true;
                 }
@@ -1770,14 +1808,7 @@ fn card(
             if archived.is_none() {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("⏳ en attente de").size(12.5).color(MUTED));
-                    wait = Some(
-                        ui.add(
-                            TextEdit::singleline(&mut t.waiting)
-                                .hint_text(hint("nom"))
-                                .margin(vec2(10.0, 4.0))
-                                .desired_width(180.0),
-                        ),
-                    );
+                    wait = Some(complete_field(ui, &mut t.waiting, "nom", 180.0, names, false));
                     if !t.waiting.is_empty() && text_button(ui, "Débloqué", GREEN) {
                         t.waiting.clear();
                         out.changed = true;
@@ -1857,6 +1888,16 @@ mod tests {
         assert_eq!(Date(2026, 9, 14).weekday(), 0);
         assert_eq!(today.plus(30), Date(2026, 10, 9));
         assert_eq!(Date::parse(&Date(2026, 9, 15).fr(), today), Some(Date(2026, 9, 15)));
+    }
+
+    #[test]
+    fn completion_suffix() {
+        let names: Vec<String> = ["Anne Sophie", "BK", "Client"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(completion("an", &names, false), Some("ne Sophie".into()));
+        assert_eq!(completion("BK", &names, false), None);
+        assert_eq!(completion("", &names, false), None);
+        assert_eq!(completion("rh, cl", &names, true), Some("ient".into()));
+        assert_eq!(completion("rh,", &names, true), None);
     }
 
     #[test]
