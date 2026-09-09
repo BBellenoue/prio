@@ -8,6 +8,10 @@ updates:
     groups:
       cargo:
         patterns: ["*"]
+    ignore:
+      # wgpu is only listed to turn on the dx12 backend; its version must be the one
+      # eframe pins, so it moves when eframe moves, never on its own.
+      - dependency-name: wgpu
   - package-ecosystem: github-actions
     directory: /
     schedule:
