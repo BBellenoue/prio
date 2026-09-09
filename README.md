@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.svg" alt="" width="112">
+</p>
+
 <h1 align="center">Prio</h1>
 
 <p align="center">
@@ -36,6 +40,10 @@ makes the list honest about what is rotting.
 - **Resident**: one process at logon, a tray icon (left click opens the list,
   right click for a menu), windows created on the shortcut and destroyed on
   close. About 20 ms from the key press to the window.
+- **Your shortcuts**: the gear in the list's title bar opens the settings,
+  where each shortcut is set by pressing the combination you want (Ctrl and/or
+  Alt, Shift if you like, then a letter, a digit, F1 to F24 or Space). Applied
+  at once; a combination another application already holds is flagged.
 
 Dark, frameless windows drawn with the system's Segoe UI; no assets shipped.
 
@@ -47,6 +55,7 @@ Everything lives in `%APPDATA%\prio\`:
 |---|---|
 | `tasks.json` | `{ "active": [...], "done": [...] }`, one object per task, readable and editable |
 | `backup\tasks.YYYY-MM-DD.json` | a copy taken before the first write of each day, 30 days kept |
+| `settings.json` | the two shortcuts, `Ctrl+Alt+A` and `Ctrl+Alt+P` by default |
 | `resident.tid` | the id of the resident's hotkey thread, so a second launch can wake it |
 
 Nothing leaves the machine. To sync between computers, point the folder at
@@ -102,8 +111,13 @@ locally.
 
 `PRIO_DEBUG=1` writes a trace to `%APPDATA%\prio\debug.log`.
 `PRIO_TEST_HOTKEY=1` (add) or `2` (list) fires a shortcut at startup, for
-testing without a keyboard. `prio.exe add cal` opens the capture window with
-the calendar unfolded.
+testing without a keyboard; `PRIO_TEST_SETTINGS=1` opens the list on its
+settings panel. `prio.exe add cal` opens the capture window with the calendar
+unfolded.
+
+The logo lives in `docs/logo.svg`; the tray and window icons are the same
+drawing, rasterised in code (`logo_rgba`). `docs/social-preview.png` is the
+1280x640 card for the repository's social preview.
 
 ## Licence
 

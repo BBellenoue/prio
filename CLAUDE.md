@@ -24,6 +24,9 @@ The release binary is locked while the resident runs: stop `prio.exe` before
   (no accents in comments; accents are fine in user-facing strings).
 - Deliberate shortcuts carry a `ponytail:` comment naming the ceiling and the
   upgrade path.
+- The egui context lock is not reentrant: never read the context (`has_focus`,
+  `input`, `memory`) inside a `data_mut` / `memory_mut` closure. It froze the
+  window once; compute first, then write.
 - Plain hyphen `-` everywhere. Never an em dash or an en dash, in code, prose,
   or commit messages.
 
@@ -40,7 +43,8 @@ The release binary is locked while the resident runs: stop `prio.exe` before
 ## Verifying the resident without a keyboard
 
 `PRIO_DEBUG=1` traces to `%APPDATA%\prio\debug.log`. `PRIO_TEST_HOTKEY=1|2`
-fires Ctrl+Alt+A / Ctrl+Alt+P at startup. From a script, post
+fires the add / list shortcut at startup; `PRIO_TEST_SETTINGS=1` opens the
+list on the settings panel. From a script, post
 `WM_HOTKEY` (0x0312) with `wParam` 1 or 2 to the thread id in
 `%APPDATA%\prio\resident.tid`, and `WM_CLOSE` to a window to close it. Do not
 use `SendKeys`: it types into whatever window the user has in front.

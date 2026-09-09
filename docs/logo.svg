@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Prio">
+  <!-- Meme dessin que l'icone de zone de notification: tuile bleue, trois barres de priorite decroissantes. -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="#8AB4FF"/>
+  <rect x="32" y="36" width="64" height="14" rx="7" fill="#0F1118"/>
+  <rect x="32" y="57" width="48" height="14" rx="7" fill="#0F1118"/>
+  <rect x="32" y="78" width="32" height="14" rx="7" fill="#0F1118"/>
+</svg>
