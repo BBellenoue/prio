@@ -1489,9 +1489,10 @@ impl List {
                     waiting_header = true;
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("EN ATTENTE").font(FontId::new(10.5, semibold())).color(DIM));
+                        ui.label(RichText::new("EN ATTENTE").font(FontId::new(10.5, semibold())).color(MUTED));
                         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                        ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, BORDER));
+                        ui.painter()
+                            .hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, DIM.lerp_to_gamma(MUTED, 0.6)));
                     });
                     ui.add_space(4.0);
                 }
