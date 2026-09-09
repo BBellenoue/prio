@@ -1,0 +1,4 @@
+# glib 0.18 (GHSA-wrw7-89jp-8q8g): reached through tray-icon's gtk dependencies, which
+# only compile on Linux. Prio is Windows-only, the code never runs here; the fix is in
+# glib 0.20, which gtk 0.18 does not accept.
+GHSA-wrw7-89jp-8q8g
