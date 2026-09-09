@@ -967,7 +967,8 @@ fn completion(text: &str, candidates: &[String], multi: bool) -> Option<String> 
 /// Tab l'accepte. Sans proposition, Tab garde son role (champ suivant).
 fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32, candidates: &[String], multi: bool) -> egui::Response {
     let id = Id::new("complete").with(hint_s);
-    // Tab n'est intercepte (et insere '\t') que si le tour precedent avait une proposition.
+    // Tab n'est retenu (lock_focus) que si le tour precedent affichait une proposition ;
+    // egui n'insere pas de tabulation dans un champ monoligne, on lit donc la touche.
     let had = ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
     let out = TextEdit::singleline(text)
         .hint_text(hint(hint_s))
@@ -975,24 +976,52 @@ fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32
         .desired_width(width)
         .lock_focus(had)
         .show(ui);
-    let tab = text.contains('\t');
-    if tab {
-        text.retain(|c| c != '\t');
-    }
-    let sugg = completion(text, candidates, multi);
-    if tab && let Some(suf) = &sugg {
-        text.push_str(suf);
-    }
-    let sugg = if tab { None } else { sugg };
-    if out.response.has_focus()
-        && let Some(suf) = &sugg
-    {
+    let focused = out.response.has_focus();
+    let mut sugg = completion(text, candidates, multi);
+    if had && focused && ui.input(|i| i.key_pressed(egui::Key::Tab)) {
+        if sugg.take().is_some() {
+            // remplace le segment tape par la forme canonique du candidat ("cl" -> "Client")
+            let seg_chars = if multi {
+                text.rsplit(',').next().unwrap_or("")
+            } else {
+                text.as_str()
+            }
+            .trim_start()
+            .chars()
+            .count();
+            let low = text
+                .chars()
+                .rev()
+                .take(seg_chars)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
+                .to_lowercase();
+            if let Some(full) = candidates.iter().find(|c| c.to_lowercase().starts_with(&low)).cloned() {
+                let keep = text.chars().count() - seg_chars;
+                *text = text.chars().take(keep).collect::<String>() + &full;
+            }
+            if multi {
+                text.push_str(", "); // pret pour le tag suivant
+            }
+            // curseur en fin de champ (egui l'aurait laisse avant le suffixe)
+            let mut state = out.state;
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(text.chars().count()))));
+            state.store(ui.ctx(), out.response.id);
+        }
+    } else if focused && let Some(suf) = &sugg {
         let font = egui::TextStyle::Body.resolve(ui.style());
         let at = out.galley_pos + vec2(out.galley.size().x, 0.0);
         ui.painter()
             .text(at, Align2::LEFT_TOP, format!("{suf}   Tab"), font, DIM.lerp_to_gamma(MUTED, 0.5));
     }
-    ui.ctx().data_mut(|d| d.insert_temp(id, sugg.is_some() && out.response.has_focus()));
+    // Toute valeur lue sur le contexte (has_focus, input) doit l'etre AVANT ce verrou d'ecriture:
+    // un acces au contexte depuis la fermeture bloque le thread (verrou non reentrant).
+    let show_next = sugg.is_some() && focused;
+    ui.ctx().data_mut(|d| d.insert_temp(id, show_next));
     out.response
 }
 
