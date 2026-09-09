@@ -11,7 +11,10 @@ cargo test
 cargo build --release
 ```
 
-The same steps run in CI on every pull request, on Windows.
+The same steps run in CI on every pull request, on Windows, alongside a
+security workflow (Semgrep, Trivy, cargo-deny, Gitleaks). A new dependency has
+to pass `cargo deny check`: no unpatched RustSec advisory, a licence in the
+allow list of `deny.toml`, and crates.io as its only source.
 
 A few things that are easy to miss:
 

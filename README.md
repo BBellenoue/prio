@@ -2,6 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/BBellenoue/prio/actions/workflows/ci.yml"><img src="https://github.com/BBellenoue/prio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/BBellenoue/prio/actions/workflows/security.yml"><img src="https://github.com/BBellenoue/prio/actions/workflows/security.yml/badge.svg" alt="Security"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue.svg" alt="Licence: MIT"></a>
 </p>
 
@@ -93,6 +94,11 @@ cargo fmt --check
 cargo clippy -- -D warnings
 cargo test
 ```
+
+CI runs those on Windows. A second workflow runs Semgrep, Trivy, cargo-deny
+and Gitleaks on every push and every Monday, with findings in the repository's
+Security tab; `cargo deny check` runs the same advisory and licence checks
+locally.
 
 `PRIO_DEBUG=1` writes a trace to `%APPDATA%\prio\debug.log`.
 `PRIO_TEST_HOTKEY=1` (add) or `2` (list) fires a shortcut at startup, for

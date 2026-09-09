@@ -1,0 +1,46 @@
+# cargo-deny: advisories RustSec, licences, doublons, sources. `cargo deny check` en local,
+# meme commande en CI (workflow Security).
+
+[graph]
+targets = ["x86_64-pc-windows-msvc"]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # ttf-parser (via ab_glyph, via egui) declare non maintenu ; rien a faire ici tant qu'egui ne migre pas.
+    { id = "RUSTSEC-2026-0192", reason = "transitive via egui/ab_glyph, pas de correctif amont" },
+]
+
+[licenses]
+version = 2
+# Tout ce que l'arbre eframe/wgpu/tray-icon tire, verifie avec `cargo deny check licenses`.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = false
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
