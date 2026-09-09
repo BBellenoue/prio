@@ -145,7 +145,7 @@ fn chip(ui: &mut egui::Ui, label: &str) -> bool {
         r,
         11.0,
         if h { ACCENT.linear_multiply(0.18) } else { CARD },
-        Stroke::new(1.0, if h { ACCENT } else { BORDER }),
+        Stroke::new(1.0_f32, if h { ACCENT } else { BORDER }),
         StrokeKind::Inside,
     );
     ui.painter().galley(r.center() - g.size() / 2.0, g, if h { TEXT } else { MUTED });
@@ -212,7 +212,7 @@ fn calendar(ui: &mut egui::Ui, view: &mut (i32, u32), selected: Option<Date>, to
                         ui.painter().circle_filled(r.center(), 14.0, CARD_HOVER);
                     }
                     if is_today && !is_sel {
-                        ui.painter().circle_stroke(r.center(), 14.0, Stroke::new(1.5, ACCENT));
+                        ui.painter().circle_stroke(r.center(), 14.0, Stroke::new(1.5_f32, ACCENT));
                     }
                     let col = if is_sel {
                         BG
@@ -262,7 +262,7 @@ fn calendar(ui: &mut egui::Ui, view: &mut (i32, u32), selected: Option<Date>, to
 /// Icone calendrier peinte (pas d'emoji).
 fn calendar_icon(p: &egui::Painter, c: egui::Pos2, color: Color32) {
     let r = Rect::from_center_size(c, vec2(14.0, 13.0));
-    p.rect_stroke(r, 2.5, Stroke::new(1.4, color), StrokeKind::Inside);
+    p.rect_stroke(r, 2.5, Stroke::new(1.4_f32, color), StrokeKind::Inside);
     p.rect_filled(
         Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + 4.0)),
         CornerRadius {
@@ -751,8 +751,8 @@ fn style(ctx: &egui::Context) {
     v.override_text_color = Some(TEXT);
     v.hyperlink_color = ACCENT;
     v.selection.bg_fill = ACCENT.linear_multiply(0.35);
-    v.selection.stroke = Stroke::new(1.5, ACCENT);
-    v.text_cursor.stroke = Stroke::new(2.0, ACCENT);
+    v.selection.stroke = Stroke::new(1.5_f32, ACCENT);
+    v.text_cursor.stroke = Stroke::new(2.0_f32, ACCENT);
     for w in [
         &mut v.widgets.inactive,
         &mut v.widgets.hovered,
@@ -762,13 +762,13 @@ fn style(ctx: &egui::Context) {
         w.corner_radius = CornerRadius::same(8);
         w.bg_fill = FIELD;
         w.weak_bg_fill = FIELD;
-        w.bg_stroke = Stroke::new(1.0, BORDER);
-        w.fg_stroke = Stroke::new(1.0, TEXT);
+        w.bg_stroke = Stroke::new(1.0_f32, BORDER);
+        w.fg_stroke = Stroke::new(1.0_f32, TEXT);
         w.expansion = 0.0;
     }
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT.linear_multiply(0.5));
-    v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT.linear_multiply(0.5));
+    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
     v.popup_shadow = egui::epaint::Shadow::NONE;
     ctx.set_visuals(v);
     ctx.style_mut(|s| {
@@ -786,7 +786,7 @@ fn window_chrome(ctx: &egui::Context, ui: &egui::Ui) {
         ctx.send_viewport_cmd(ViewportCommand::Close);
     }
     let r = ui.max_rect();
-    ui.painter().rect(r, RADIUS, BG, Stroke::new(1.0, BORDER), StrokeKind::Inside);
+    ui.painter().rect(r, RADIUS, BG, Stroke::new(1.0_f32, BORDER), StrokeKind::Inside);
 }
 
 /// Barre de titre maison: zone de drag + bouton fermer. Retourne le rect libre entre les deux.
@@ -804,9 +804,9 @@ fn title_bar(ui: &mut egui::Ui, height: f32) -> Rect {
     let col = if c.hovered() { TEXT } else { MUTED };
     let (cc, k) = (close.center(), 4.5);
     ui.painter()
-        .line_segment([cc + vec2(-k, -k), cc + vec2(k, k)], Stroke::new(1.5, col));
+        .line_segment([cc + vec2(-k, -k), cc + vec2(k, k)], Stroke::new(1.5_f32, col));
     ui.painter()
-        .line_segment([cc + vec2(-k, k), cc + vec2(k, -k)], Stroke::new(1.5, col));
+        .line_segment([cc + vec2(-k, k), cc + vec2(k, -k)], Stroke::new(1.5_f32, col));
     if c.clicked() {
         ui.ctx().send_viewport_cmd(ViewportCommand::Close);
     }
@@ -828,7 +828,7 @@ fn resize_grip(ui: &mut egui::Ui) {
     for k in 0..3 {
         let p = c - vec2(k as f32 * 4.0, 0.0);
         let q = c - vec2(0.0, k as f32 * 4.0);
-        ui.painter().line_segment([p, q], Stroke::new(1.0, DIM));
+        ui.painter().line_segment([p, q], Stroke::new(1.0_f32, DIM));
     }
 }
 
@@ -864,7 +864,7 @@ fn round_button(ui: &mut egui::Ui, id: Id, glyph: &str, tip: &str) -> bool {
     let t = ui.ctx().animate_bool(id, resp.hovered());
     let fill = Color32::TRANSPARENT.lerp_to_gamma(ACCENT, t);
     let stroke = DIM.lerp_to_gamma(ACCENT, t);
-    ui.painter().circle(rect.center(), 11.0, fill, Stroke::new(1.5, stroke));
+    ui.painter().circle(rect.center(), 11.0, fill, Stroke::new(1.5_f32, stroke));
     let fg = MUTED.lerp_to_gamma(BG, t);
     ui.painter()
         .text(rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(12.0), fg);
@@ -1105,7 +1105,7 @@ impl Add {
                 ui.painter().rect_stroke(
                     rect,
                     8.0,
-                    Stroke::new(1.0, if cal.hovered() { ACCENT } else { BORDER }),
+                    Stroke::new(1.0_f32, if cal.hovered() { ACCENT } else { BORDER }),
                     StrokeKind::Inside,
                 );
                 calendar_icon(
@@ -1142,7 +1142,7 @@ impl Add {
                 ui.add_space(4.0);
                 let picked = Frame::new()
                     .fill(FIELD)
-                    .stroke(Stroke::new(1.0, BORDER))
+                    .stroke(Stroke::new(1.0_f32, BORDER))
                     .corner_radius(10.0)
                     .inner_margin(egui::Margin::symmetric(10, 10))
                     .show(&mut ui, |ui| {
@@ -1406,7 +1406,7 @@ impl List {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("EN ATTENTE").font(FontId::new(10.5, semibold())).color(DIM));
                         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                        ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, BORDER));
+                        ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, BORDER));
                     });
                     ui.add_space(4.0);
                 }
@@ -1431,7 +1431,7 @@ impl List {
                 let to = rows.iter().position(|r| pos.y < r.center().y).unwrap_or(rows.len());
                 if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
                     let y = rows.get(to).map(|r| r.top() - 4.0).unwrap_or(last.bottom() + 4.0);
-                    ui.painter().hline(first.x_range(), y, Stroke::new(2.0, ACCENT));
+                    ui.painter().hline(first.x_range(), y, Stroke::new(2.0_f32, ACCENT));
                     ui.painter().circle_filled(pos2(first.left(), y), 4.0, ACCENT);
                 }
                 if ui.input(|i| i.pointer.any_released()) {
@@ -1624,7 +1624,7 @@ fn card(
 
     let mut f = Frame::new()
         .fill(CARD.lerp_to_gamma(CARD_HOVER, t_hover))
-        .stroke(Stroke::new(1.0, BORDER.lerp_to_gamma(ACCENT.linear_multiply(0.6), t_hover)))
+        .stroke(Stroke::new(1.0_f32, BORDER.lerp_to_gamma(ACCENT.linear_multiply(0.6), t_hover)))
         .corner_radius(10.0)
         .inner_margin(egui::Margin::symmetric(14, 12))
         .begin(ui);
@@ -1709,7 +1709,7 @@ fn card(
         if open {
             ui.add_space(8.0);
             let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-            ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, BORDER));
+            ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, BORDER));
             ui.add_space(6.0);
             let notes = ui.add(
                 TextEdit::multiline(&mut t.notes)
