@@ -31,6 +31,11 @@ const AVATARS: [Color32; 6] = [
 const RADIUS: f32 = 12.0;
 const STALE_DAYS: i64 = 14;
 
+/// Texte d'aide des champs: plus pale que la saisie (override_text_color imposerait sinon la meme couleur).
+fn hint(s: &str) -> RichText {
+    RichText::new(s).color(DIM.lerp_to_gamma(MUTED, 0.55))
+}
+
 fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())
 }
@@ -1074,7 +1079,8 @@ impl Add {
                 ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(pos2(inner.left(), bar.bottom() + 2.0), inner.max)));
             let r = ui.add(
                 TextEdit::singleline(&mut self.title)
-                    .hint_text("Qu'est-ce qu'il faut faire ?")
+                    .hint_text(hint("Ex. : relire la doc partenaire avant vendredi"))
+                    .hint_text_font(FontId::proportional(17.0))
                     .font(FontId::new(17.0, semibold()))
                     .margin(vec2(12.0, 8.0))
                     .desired_width(f32::INFINITY),
@@ -1087,12 +1093,12 @@ impl Add {
             ui.horizontal(|ui| {
                 ui.add(
                     TextEdit::singleline(&mut self.from)
-                        .hint_text("de qui ?")
+                        .hint_text(hint("Demandé par"))
                         .margin(vec2(10.0, 5.0))
                         .desired_width(190.0),
                 );
                 let mut e = TextEdit::singleline(&mut self.deadline)
-                    .hint_text("échéance JJ/MM/AAAA")
+                    .hint_text(hint("Échéance  JJ/MM/AAAA"))
                     .margin(vec2(10.0, 5.0))
                     .desired_width(150.0);
                 if bad_deadline {
@@ -1129,7 +1135,7 @@ impl Add {
                 }
                 ui.add(
                     TextEdit::singleline(&mut self.tags)
-                        .hint_text("tags, séparés par des virgules")
+                        .hint_text(hint("Tags, séparés par des virgules"))
                         .margin(vec2(10.0, 5.0))
                         .desired_width(f32::INFINITY),
                 );
@@ -1160,14 +1166,18 @@ impl Add {
             ui.add_space(2.0);
             let n = ui.add(
                 TextEdit::multiline(&mut self.notes)
-                    .hint_text("Notes, liens, contexte…  (Ctrl+Entrée pour valider depuis ici)")
+                    .hint_text(hint("Notes, liens, contexte"))
                     .desired_rows(3)
                     .margin(vec2(10.0, 6.0))
                     .desired_width(f32::INFINITY),
             );
             self.notes_focused = n.has_focus();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(RichText::new("Entrée ✔  valider     Échap  annuler").size(12.0).color(MUTED));
+                ui.label(
+                    RichText::new("Entrée ✔ valider   ·   Ctrl+Entrée depuis les notes   ·   Échap annuler")
+                        .size(12.0)
+                        .color(MUTED),
+                );
             });
         });
 
@@ -1713,7 +1723,7 @@ fn card(
             ui.add_space(6.0);
             let notes = ui.add(
                 TextEdit::multiline(&mut t.notes)
-                    .hint_text("Notes, liens, contexte…")
+                    .hint_text(hint("Notes, liens, contexte"))
                     .desired_rows(3)
                     .margin(vec2(10.0, 8.0))
                     .desired_width(f32::INFINITY),
@@ -1741,7 +1751,7 @@ fn card(
                 if ui
                     .add(
                         TextEdit::singleline(&mut tags_text)
-                            .hint_text("rh, support n2, …")
+                            .hint_text(hint("rh, support n2…"))
                             .margin(vec2(10.0, 4.0))
                             .desired_width(260.0),
                     )
@@ -1762,7 +1772,7 @@ fn card(
                     wait = Some(
                         ui.add(
                             TextEdit::singleline(&mut t.waiting)
-                                .hint_text("personne")
+                                .hint_text(hint("nom"))
                                 .margin(vec2(10.0, 4.0))
                                 .desired_width(180.0),
                         ),
