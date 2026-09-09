@@ -306,6 +306,96 @@ struct Store {
 }
 
 const FILE: &str = "tasks.json";
+const SETTINGS_FILE: &str = "settings.json";
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct Settings {
+    hotkey_add: String,
+    hotkey_list: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            hotkey_add: "Ctrl+Alt+A".into(),
+            hotkey_list: "Ctrl+Alt+P".into(),
+        }
+    }
+}
+
+fn load_settings() -> Settings {
+    std::fs::read_to_string(path(SETTINGS_FILE))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings(s: &Settings) {
+    if let Ok(j) = serde_json::to_string_pretty(s) {
+        let _ = std::fs::write(path(SETTINGS_FILE), j);
+    }
+}
+
+/// "Ctrl+Alt+A" -> (modificateurs RegisterHotKey, code de touche virtuelle). Au moins Ctrl ou Alt,
+/// puis une lettre, un chiffre, F1 a F24 ou Espace.
+fn parse_hotkey(spec: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = spec.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
+    let (key, mods) = parts.split_last()?;
+    let mut m = 0u32;
+    for md in mods {
+        m |= match md.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => 0x0002,
+            "alt" => 0x0001,
+            "shift" | "maj" => 0x0004,
+            "win" | "super" => 0x0008,
+            _ => return None,
+        };
+    }
+    if m & 0x0003 == 0 {
+        return None; // Shift ou Win seuls: trop facile a declencher par accident
+    }
+    let k = key.to_ascii_uppercase();
+    let vk = match k.as_str() {
+        "SPACE" | "ESPACE" => 0x20,
+        k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => k.as_bytes()[0] as u32,
+        k if k.starts_with('F') => {
+            let n: u32 = k[1..].parse().ok()?;
+            (1..=24).contains(&n).then(|| 0x6F + n)?
+        }
+        _ => return None,
+    };
+    Some((m, vk))
+}
+
+/// Libelle "Ctrl+Alt+A" a partir d'une touche egui et de ses modificateurs, si la combinaison est valable.
+fn hotkey_label(key: egui::Key, mods: egui::Modifiers) -> Option<String> {
+    let mut parts = Vec::new();
+    if mods.ctrl {
+        parts.push("Ctrl");
+    }
+    if mods.alt {
+        parts.push("Alt");
+    }
+    if mods.shift {
+        parts.push("Shift");
+    }
+    let name = key.name().to_string();
+    parts.push(&name);
+    let label = parts.join("+");
+    parse_hotkey(&label).map(|_| label)
+}
+
+/// Demande au resident de relire settings.json et de re-enregistrer ses raccourcis.
+fn notify_hotkeys_changed() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+    if let Some(tid) = std::fs::read_to_string(path(TID_FILE))
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    {
+        unsafe { PostThreadMessageW(tid, WM_RELOAD_HOTKEYS, 0, 0) };
+    }
+}
 
 fn path(name: &str) -> PathBuf {
     let dir = PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("prio");
@@ -406,19 +496,20 @@ fn main() -> eframe::Result {
     // Instance unique: les raccourcis sont pris AVANT de creer la moindre fenetre. S'ils sont
     // deja pris, un resident tourne: on lui demande d'afficher la liste et on s'arrete la.
     let hotkey: Arc<std::sync::atomic::AtomicUsize> = Default::default();
+    let hk_status: Arc<std::sync::atomic::AtomicUsize> = Default::default();
     let ctx_cell: Arc<std::sync::OnceLock<egui::Context>> = Default::default();
     if resident {
         let (tx, rx) = std::sync::mpsc::channel();
-        let (cell, flag) = (ctx_cell.clone(), hotkey.clone());
-        std::thread::spawn(move || hotkey_loop(tx, cell, flag));
+        let (cell, flag, st) = (ctx_cell.clone(), hotkey.clone(), hk_status.clone());
+        std::thread::spawn(move || hotkey_loop(tx, cell, flag, st));
         if !rx.recv().unwrap_or(false) {
             if wake_resident() {
                 return Ok(());
             }
-            return main_with("Prio", LIST_SIZE, false, hotkey, ctx_cell);
+            return main_with("Prio", LIST_SIZE, false, hotkey, hk_status, ctx_cell);
         }
     }
-    main_with(title, size, resident, hotkey, ctx_cell)
+    main_with(title, size, resident, hotkey, hk_status, ctx_cell)
 }
 
 fn main_with(
@@ -426,6 +517,7 @@ fn main_with(
     size: [f32; 2],
     resident: bool,
     hotkey: Arc<std::sync::atomic::AtomicUsize>,
+    hk_status: Arc<std::sync::atomic::AtomicUsize>,
     ctx_cell: Arc<std::sync::OnceLock<egui::Context>>,
 ) -> eframe::Result {
     let mut viewport = window_builder(title, size).with_resizable(title == "Prio");
@@ -450,9 +542,9 @@ fn main_with(
             dbg_log(&format!("app cree: {title}"));
             Ok(match title {
                 "Nouvelle priorité" => Box::new(Add::new()) as Box<dyn eframe::App>,
-                "Prio" => Box::new(List::new(None)),
+                "Prio" => Box::new(List::new(None, None)),
                 _ => {
-                    let r = Resident::new(hotkey);
+                    let r = Resident::new(hotkey, hk_status);
                     // test sans clavier: PRIO_TEST_HOTKEY=1|2 simule Ctrl+Alt+A / Ctrl+Alt+P au demarrage
                     if let Some(n) = std::env::var("PRIO_TEST_HOTKEY").ok().and_then(|v| v.parse().ok()) {
                         r.hotkey.store(n, std::sync::atomic::Ordering::SeqCst);
@@ -473,6 +565,11 @@ fn window_builder(title: &str, size: [f32; 2]) -> egui::ViewportBuilder {
         .with_always_on_top()
         .with_decorations(false)
         .with_transparent(true)
+        .with_icon(Arc::new(egui::IconData {
+            rgba: logo_rgba(64),
+            width: 64,
+            height: 64,
+        }))
 }
 
 /// Trace de debug (variable PRIO_DEBUG=1) dans %APPDATA%\priority\debug.log.
@@ -517,27 +614,60 @@ fn wake_resident() -> bool {
 }
 
 const HK_QUIT: usize = 3;
+const WM_RELOAD_HOTKEYS: u32 = 0x8001; // WM_APP + 1, poste au thread des raccourcis
+const HK_ADD_FAILED: usize = 1; // bits de hk_status
+const HK_LIST_FAILED: usize = 2;
 
-/// Icone de zone de notification, 32x32, dessinee (pas d'asset): tuile bleue, trois barres.
-fn tray_icon_rgba() -> Vec<u8> {
-    let (w, h) = (32usize, 32usize);
-    let mut px = vec![0u8; w * h * 4];
-    for y in 0..h {
-        for x in 0..w {
+/// (Re)enregistre les deux raccourcis d'apres settings.json. Renvoie false si AUCUN n'a pu l'etre
+/// (typiquement: un autre resident tourne). Les echecs individuels sont publies dans `status`.
+fn register_hotkeys(status: &std::sync::atomic::AtomicUsize) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey};
+    let s = load_settings();
+    let mut bits = 0;
+    for (id, spec, bit) in [(HK_ADD, &s.hotkey_add, HK_ADD_FAILED), (HK_LIST, &s.hotkey_list, HK_LIST_FAILED)] {
+        unsafe { UnregisterHotKey(std::ptr::null_mut(), id as i32) };
+        let ok = parse_hotkey(spec)
+            .map(|(m, vk)| unsafe { RegisterHotKey(std::ptr::null_mut(), id as i32, m | MOD_NOREPEAT, vk) != 0 })
+            .unwrap_or(false);
+        if !ok {
+            bits |= bit;
+        }
+    }
+    status.store(bits, std::sync::atomic::Ordering::SeqCst);
+    dbg_log(&format!("register_hotkeys {:?}/{:?} -> echecs={bits}", s.hotkey_add, s.hotkey_list));
+    bits != HK_ADD_FAILED | HK_LIST_FAILED
+}
+
+/// Logo dessine (pas d'asset): tuile bleue arrondie, trois barres de priorite decroissantes.
+/// Memes proportions que docs/logo.svg (grille 128). Sert a l'icone de zone de notification
+/// (32 px) et a l'icone des fenetres (64 px).
+fn logo_rgba(size: usize) -> Vec<u8> {
+    let k = size as f32 / 128.0;
+    let mut px = vec![0u8; size * size * 4];
+    // (x, y, largeur, hauteur, rayon) dans la grille 128
+    let tile = (8.0, 8.0, 112.0, 112.0, 28.0);
+    let bars = [
+        (32.0, 36.0, 64.0, 14.0, 7.0),
+        (32.0, 57.0, 48.0, 14.0, 7.0),
+        (32.0, 78.0, 32.0, 14.0, 7.0),
+    ];
+    let inside = |fx: f32, fy: f32, r: (f32, f32, f32, f32, f32)| {
+        let (x, y, w, h, rad) = (r.0 * k, r.1 * k, r.2 * k, r.3 * k, r.4 * k);
+        let (cx, cy) = (fx.clamp(x + rad, x + w - rad), fy.clamp(y + rad, y + h - rad));
+        ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt() <= rad
+    };
+    for y in 0..size {
+        for x in 0..size {
             let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            // tuile arrondie (rayon 7)
-            let (cx, cy) = (fx.clamp(7.0, 25.0), fy.clamp(7.0, 25.0));
-            let inside = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt() <= 7.0;
-            if !inside {
+            if !inside(fx, fy, tile) {
                 continue;
             }
-            let bar = |y0: usize, len: usize| y >= y0 && y < y0 + 4 && x >= 8 && x < 8 + len;
-            let (r, g, b) = if bar(8, 16) || bar(14, 12) || bar(20, 8) {
+            let (r, g, b) = if bars.iter().any(|&b| inside(fx, fy, b)) {
                 (0x0F, 0x11, 0x18)
             } else {
                 (0x8A, 0xB4, 0xFF)
             };
-            let i = (y * w + x) * 4;
+            let i = (y * size + x) * 4;
             px[i..i + 4].copy_from_slice(&[r, g, b, 255]);
         }
     }
@@ -547,47 +677,38 @@ fn tray_icon_rgba() -> Vec<u8> {
 /// Thread dedie: RegisterHotKey lie les raccourcis au thread appelant, et winit
 /// n'expose pas WM_HOTKEY. Heberge aussi l'icone de zone de notification (meme boucle
 /// de messages). Reveille l'UI via request_repaint quand un evenement tombe.
-fn hotkey_loop(tx: std::sync::mpsc::Sender<bool>, ctx: Arc<std::sync::OnceLock<egui::Context>>, flag: Arc<std::sync::atomic::AtomicUsize>) {
+fn hotkey_loop(
+    tx: std::sync::mpsc::Sender<bool>,
+    ctx: Arc<std::sync::OnceLock<egui::Context>>,
+    flag: Arc<std::sync::atomic::AtomicUsize>,
+    status: Arc<std::sync::atomic::AtomicUsize>,
+) {
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, RegisterHotKey};
     use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage, WM_HOTKEY};
-    let ok = unsafe {
-        RegisterHotKey(
-            std::ptr::null_mut(),
-            HK_ADD as i32,
-            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-            'A' as u32,
-        ) != 0
-            && RegisterHotKey(
-                std::ptr::null_mut(),
-                HK_LIST as i32,
-                MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
-                'P' as u32,
-            ) != 0
-    };
-    dbg_log(&format!("RegisterHotKey ok={ok}"));
+    let ok = register_hotkeys(&status);
     let _ = tx.send(ok);
     if !ok {
         return;
     }
     let _ = std::fs::write(path(TID_FILE), unsafe { GetCurrentThreadId() }.to_string());
 
+    let settings = load_settings();
     let menu = Menu::new();
-    let m_list = MenuItem::new("Prio	Ctrl+Alt+P", true, None);
-    let m_add = MenuItem::new("Ajouter	Ctrl+Alt+A", true, None);
+    let m_list = MenuItem::new(format!("Prio\t{}", settings.hotkey_list), true, None);
+    let m_add = MenuItem::new(format!("Ajouter\t{}", settings.hotkey_add), true, None);
     let m_quit = MenuItem::new("Quitter", true, None);
     let _ = menu.append_items(&[&m_list, &m_add, &PredefinedMenuItem::separator(), &m_quit]);
-    let icon = tray_icon::Icon::from_rgba(tray_icon_rgba(), 32, 32).ok();
+    let icon = tray_icon::Icon::from_rgba(logo_rgba(32), 32, 32).ok();
     let mut builder = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Prio  ·  Ctrl+Alt+P")
+        .with_tooltip(format!("Prio  ·  {}", settings.hotkey_list))
         .with_menu_on_left_click(false);
     if let Some(i) = icon {
         builder = builder.with_icon(i);
     }
-    let _tray = builder.build(); // garde l'icone vivante jusqu'a la fin du thread
+    let tray = builder.build(); // garde l'icone vivante jusqu'a la fin du thread
 
     let fire = |n: usize| {
         flag.store(n, std::sync::atomic::Ordering::SeqCst);
@@ -605,6 +726,16 @@ fn hotkey_loop(tx: std::sync::mpsc::Sender<bool>, ctx: Arc<std::sync::OnceLock<e
         if msg.message == WM_HOTKEY {
             dbg_log(&format!("WM_HOTKEY {}", msg.wParam));
             fire(msg.wParam);
+        }
+        if msg.message == WM_RELOAD_HOTKEYS {
+            register_hotkeys(&status);
+            let s = load_settings();
+            m_list.set_text(format!("Prio\t{}", s.hotkey_list));
+            m_add.set_text(format!("Ajouter\t{}", s.hotkey_add));
+            if let Ok(t) = &tray {
+                let _ = t.set_tooltip(Some(format!("Prio  ·  {}", s.hotkey_list)));
+            }
+            fire(0); // rafraichit le panneau Reglages (etat des raccourcis)
         }
         unsafe {
             TranslateMessage(&msg);
@@ -648,11 +779,11 @@ struct Resident {
 }
 
 impl Resident {
-    fn new(hotkey: Arc<std::sync::atomic::AtomicUsize>) -> Resident {
+    fn new(hotkey: Arc<std::sync::atomic::AtomicUsize>, hk_status: Arc<std::sync::atomic::AtomicUsize>) -> Resident {
         let quit: Arc<std::sync::atomic::AtomicBool> = Default::default();
         Resident {
             hotkey,
-            list: Arc::new(std::sync::Mutex::new(List::new(Some(quit.clone())))),
+            list: Arc::new(std::sync::Mutex::new(List::new(Some(quit.clone()), Some(hk_status)))),
             list_open: Default::default(),
             list_pos: Default::default(),
             add: Arc::new(std::sync::Mutex::new(Add::default())),
@@ -1287,10 +1418,14 @@ struct List {
     open: Option<(bool, usize)>, // carte depliee: (archives ?, index)
     copied_at: Option<f64>,
     quit: Option<Arc<std::sync::atomic::AtomicBool>>, // Some en mode resident: bouton "Quitter"
+    settings: Settings,
+    show_settings: bool,
+    capture: Option<usize>,                                 // raccourci en cours de saisie (HK_ADD / HK_LIST)
+    hk_status: Option<Arc<std::sync::atomic::AtomicUsize>>, // echecs d'enregistrement (mode resident)
 }
 
 impl List {
-    fn new(quit: Option<Arc<std::sync::atomic::AtomicBool>>) -> List {
+    fn new(quit: Option<Arc<std::sync::atomic::AtomicBool>>, hk_status: Option<Arc<std::sync::atomic::AtomicUsize>>) -> List {
         let mut store = load();
         sort_waiting(&mut store.active);
         let names = names(&store);
@@ -1305,7 +1440,81 @@ impl List {
             open: None,
             copied_at: None,
             quit,
+            settings: load_settings(),
+            // PRIO_TEST_SETTINGS=1 ouvre directement le panneau Reglages (captures d'ecran)
+            show_settings: std::env::var_os("PRIO_TEST_SETTINGS").is_some(),
+            capture: None,
+            hk_status,
         }
+    }
+
+    /// Panneau Reglages: les deux raccourcis, saisis en appuyant sur la combinaison.
+    fn settings_view(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.label(RichText::new("Raccourcis clavier").font(FontId::new(15.0, semibold())).color(TEXT));
+        ui.label(
+            RichText::new("Ctrl et/ou Alt (Shift en plus si besoin), puis une lettre, un chiffre, F1 à F24 ou Espace.")
+                .size(12.5)
+                .color(MUTED),
+        );
+        ui.add_space(10.0);
+        let status = self
+            .hk_status
+            .as_ref()
+            .map(|s| s.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap_or(0);
+        let rows = [
+            (HK_ADD, "Ajouter une priorité", self.settings.hotkey_add.clone(), HK_ADD_FAILED),
+            (HK_LIST, "Afficher la liste", self.settings.hotkey_list.clone(), HK_LIST_FAILED),
+        ];
+        for (which, label, value, bit) in rows {
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(vec2(170.0, 30.0), Layout::left_to_right(Align::Center), |ui| {
+                    ui.label(RichText::new(label).size(14.0).color(TEXT));
+                });
+                let capturing = self.capture == Some(which);
+                let text = if capturing {
+                    "Appuie sur la combinaison…   (Échap annule)".to_string()
+                } else {
+                    value
+                };
+                if text_button(ui, &text, if capturing { AMBER } else { ACCENT }) {
+                    self.capture = if capturing { None } else { Some(which) };
+                }
+                if status & bit != 0 {
+                    ui.label(RichText::new("déjà pris par une autre application").size(12.0).color(RED));
+                }
+            });
+        }
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            if chip(ui, "Réinitialiser (Ctrl+Alt+A / Ctrl+Alt+P)") {
+                self.settings = Settings::default();
+                save_settings(&self.settings);
+                notify_hotkeys_changed();
+            }
+        });
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new("Appliqué immédiatement au résident ; l'icône et le menu suivent.")
+                .size(12.0)
+                .color(MUTED),
+        );
+        ui.label(
+            RichText::new(format!("Fichier : {}", path(SETTINGS_FILE).display()))
+                .size(11.0)
+                .color(DIM.lerp_to_gamma(MUTED, 0.5)),
+        );
+    }
+}
+
+/// Roue crantee peinte (bouton Reglages).
+fn gear_icon(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    p.circle_stroke(c, 5.0, Stroke::new(1.6_f32, color));
+    for k in 0..8 {
+        let a = k as f32 * std::f32::consts::TAU / 8.0;
+        let d = vec2(a.cos(), a.sin());
+        p.line_segment([c + d * 6.2, c + d * 8.6], Stroke::new(2.0_f32, color));
     }
 }
 
@@ -1334,10 +1543,40 @@ impl List {
         }
         self.focused = focused;
 
+        // Saisie d'un raccourci: la premiere combinaison valable est enregistree, Echap annule
+        // (et n'atteint pas window_chrome, qui fermerait la fenetre).
+        if let Some(which) = self.capture {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.capture = None;
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            } else if let Some(label) = ctx.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => hotkey_label(*key, *modifiers),
+                    _ => None,
+                })
+            }) {
+                if which == HK_ADD {
+                    self.settings.hotkey_add = label;
+                } else {
+                    self.settings.hotkey_list = label;
+                }
+                save_settings(&self.settings);
+                notify_hotkeys_changed();
+                self.capture = None;
+            }
+        }
+
         egui::CentralPanel::default().frame(Frame::NONE).show(ctx, |ui| {
             window_chrome(ctx, ui);
             let bar = title_bar(ui, 56.0);
-            let (title, n) = if self.show_done {
+            let (title, n) = if self.show_settings {
+                ("Réglages", 0)
+            } else if self.show_done {
                 ("Archives", self.store.done.len())
             } else {
                 ("Prio", self.store.active.len())
@@ -1346,13 +1585,15 @@ impl List {
             let g = p.layout_no_wrap(title.into(), FontId::new(22.0, semibold()), TEXT);
             let at = bar.left_center() + vec2(18.0, 0.0);
             p.galley(at - vec2(0.0, g.size().y / 2.0), g.clone(), TEXT);
-            p.text(
-                at + vec2(g.size().x + 8.0, 0.0),
-                Align2::LEFT_CENTER,
-                n.to_string(),
-                FontId::new(22.0, semibold()),
-                MUTED,
-            );
+            if !self.show_settings {
+                p.text(
+                    at + vec2(g.size().x + 8.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    n.to_string(),
+                    FontId::new(22.0, semibold()),
+                    MUTED,
+                );
+            }
 
             // bascule en cours / archives, dans la barre de titre
             let other = if self.show_done {
@@ -1380,15 +1621,38 @@ impl List {
             ui.painter().galley(orect.center() - og.size() / 2.0, og, ACCENT);
             if o.clicked() {
                 self.show_done = !self.show_done;
+                self.show_settings = false;
                 self.open = None;
+            }
+
+            // roue crantee: reglages
+            let grect = Rect::from_center_size(pos2(orect.left() - 20.0, bar.center().y), vec2(28.0, 28.0));
+            let gr = ui
+                .interact(grect, Id::new("settings"), Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Réglages (raccourcis clavier)");
+            if gr.hovered() || self.show_settings {
+                ui.painter().circle_filled(grect.center(), 13.0, ACCENT.linear_multiply(0.18));
+            }
+            gear_icon(
+                ui.painter(),
+                grect.center(),
+                if gr.hovered() || self.show_settings { ACCENT } else { MUTED },
+            );
+            if gr.clicked() {
+                self.show_settings = !self.show_settings;
+                self.capture = None;
             }
 
             // pied: rappel des gestes
             let foot = pos2(ui.max_rect().left() + 16.0, ui.max_rect().bottom() - 14.0);
             let hint = if self.show_done {
-                "clic = notes  ·  ↩ remet en cours  ·  Échap ferme"
+                "clic = notes  ·  ↩ remet en cours  ·  Échap ferme".to_string()
             } else {
-                "Ctrl+Alt+A ajouter  ·  glisser le numéro pour réordonner  ·  clic = notes  ·  Échap ferme"
+                format!(
+                    "{} ajouter  ·  glisser le numéro pour réordonner  ·  clic = notes  ·  Échap ferme",
+                    self.settings.hotkey_add
+                )
             };
             ui.painter().text(
                 foot,
@@ -1419,7 +1683,7 @@ impl List {
 
             // filtre par tag: une rangee de pastilles sous le titre, le tag actif en plein
             let mut top = bar.bottom() + 4.0;
-            if !self.tags_all.is_empty() {
+            if !self.tags_all.is_empty() && !self.show_settings {
                 let row = Rect::from_min_max(
                     pos2(ui.max_rect().left() + 16.0, top),
                     pos2(ui.max_rect().right() - 16.0, top + 26.0),
@@ -1437,7 +1701,9 @@ impl List {
             }
             let body = Rect::from_min_max(pos2(ui.max_rect().left() + 14.0, top), ui.max_rect().max - vec2(14.0, 30.0));
             let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
-            if self.show_done {
+            if self.show_settings {
+                self.settings_view(&mut ui);
+            } else if self.show_done {
                 self.archive_view(&mut ui, today);
             } else {
                 self.active_view(&mut ui, today);
@@ -1919,6 +2185,23 @@ mod tests {
         assert_eq!(Date(2026, 9, 14).weekday(), 0);
         assert_eq!(today.plus(30), Date(2026, 10, 9));
         assert_eq!(Date::parse(&Date(2026, 9, 15).fr(), today), Some(Date(2026, 9, 15)));
+    }
+
+    #[test]
+    fn hotkey_parsing() {
+        assert_eq!(parse_hotkey("Ctrl+Alt+A"), Some((0x0003, 0x41)));
+        assert_eq!(parse_hotkey("ctrl + shift + f5"), Some((0x0006, 0x74)));
+        assert_eq!(parse_hotkey("Alt+Espace"), Some((0x0001, 0x20)));
+        assert_eq!(parse_hotkey("Shift+A"), None); // pas de Ctrl/Alt
+        assert_eq!(parse_hotkey("Ctrl+Alt+Entrée"), None);
+        assert_eq!(parse_hotkey("Ctrl+Alt+F25"), None);
+        let m = egui::Modifiers {
+            ctrl: true,
+            alt: true,
+            ..Default::default()
+        };
+        assert_eq!(hotkey_label(egui::Key::A, m), Some("Ctrl+Alt+A".into()));
+        assert_eq!(hotkey_label(egui::Key::A, egui::Modifiers::default()), None);
     }
 
     #[test]
