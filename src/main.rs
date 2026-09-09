@@ -386,15 +386,26 @@ fn hotkey_label(key: egui::Key, mods: egui::Modifiers) -> Option<String> {
     parse_hotkey(&label).map(|_| label)
 }
 
-/// Demande au resident de relire settings.json et de re-enregistrer ses raccourcis.
-fn notify_hotkeys_changed() {
+/// Poste un message au thread des raccourcis du resident (le notre ou celui d'un autre process).
+fn post_hotkey_thread(msg: u32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
     if let Some(tid) = std::fs::read_to_string(path(TID_FILE))
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok())
     {
-        unsafe { PostThreadMessageW(tid, WM_RELOAD_HOTKEYS, 0, 0) };
+        unsafe { PostThreadMessageW(tid, msg, 0, 0) };
     }
+}
+
+/// Demande au resident de relire settings.json et de re-enregistrer ses raccourcis.
+fn notify_hotkeys_changed() {
+    post_hotkey_thread(WM_RELOAD_HOTKEYS);
+}
+
+/// Suspend les raccourcis globaux le temps d'une saisie: sinon Windows intercepte la
+/// combinaison en cours (ex. Ctrl+Alt+A) et ouvre la fenetre au lieu de la laisser au panneau.
+fn suspend_hotkeys() {
+    post_hotkey_thread(WM_SUSPEND_HOTKEYS);
 }
 
 fn path(name: &str) -> PathBuf {
@@ -615,6 +626,7 @@ fn wake_resident() -> bool {
 
 const HK_QUIT: usize = 3;
 const WM_RELOAD_HOTKEYS: u32 = 0x8001; // WM_APP + 1, poste au thread des raccourcis
+const WM_SUSPEND_HOTKEYS: u32 = 0x8002; // WM_APP + 2: desenregistre le temps d'une saisie
 const HK_ADD_FAILED: usize = 1; // bits de hk_status
 const HK_LIST_FAILED: usize = 2;
 
@@ -726,6 +738,14 @@ fn hotkey_loop(
         if msg.message == WM_HOTKEY {
             dbg_log(&format!("WM_HOTKEY {}", msg.wParam));
             fire(msg.wParam);
+        }
+        if msg.message == WM_SUSPEND_HOTKEYS {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey;
+            unsafe {
+                UnregisterHotKey(std::ptr::null_mut(), HK_ADD as i32);
+                UnregisterHotKey(std::ptr::null_mut(), HK_LIST as i32);
+            }
+            dbg_log("raccourcis suspendus (saisie en cours)");
         }
         if msg.message == WM_RELOAD_HOTKEYS {
             register_hotkeys(&status);
@@ -840,6 +860,7 @@ impl eframe::App for Resident {
             ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("list"), builder, move |ctx, _| {
                 list.lock().unwrap().ui(ctx);
                 if ctx.input(|i| i.viewport().close_requested()) {
+                    list.lock().unwrap().cancel_capture();
                     *pos.lock().unwrap() = ctx.input(|i| i.viewport().outer_rect).map(|r| r.min);
                     open.store(false, SeqCst);
                     ctx.request_repaint_of(egui::ViewportId::ROOT);
@@ -1448,6 +1469,13 @@ impl List {
         }
     }
 
+    /// Abandonne une saisie de raccourci en cours et rend leurs raccourcis au resident.
+    fn cancel_capture(&mut self) {
+        if self.capture.take().is_some() {
+            notify_hotkeys_changed();
+        }
+    }
+
     /// Panneau Reglages: les deux raccourcis, saisis en appuyant sur la combinaison.
     fn settings_view(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
@@ -1479,7 +1507,13 @@ impl List {
                     value
                 };
                 if text_button(ui, &text, if capturing { AMBER } else { ACCENT }) {
-                    self.capture = if capturing { None } else { Some(which) };
+                    if capturing {
+                        self.capture = None;
+                        notify_hotkeys_changed();
+                    } else {
+                        self.capture = Some(which);
+                        suspend_hotkeys();
+                    }
                 }
                 if status & bit != 0 {
                     ui.label(RichText::new("déjà pris par une autre application").size(12.0).color(RED));
@@ -1548,6 +1582,7 @@ impl List {
         if let Some(which) = self.capture {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.capture = None;
+                notify_hotkeys_changed();
                 ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             } else if let Some(label) = ctx.input(|i| {
                 i.events.iter().find_map(|e| match e {
@@ -1622,6 +1657,7 @@ impl List {
             if o.clicked() {
                 self.show_done = !self.show_done;
                 self.show_settings = false;
+                self.cancel_capture();
                 self.open = None;
             }
 
@@ -1641,7 +1677,7 @@ impl List {
             );
             if gr.clicked() {
                 self.show_settings = !self.show_settings;
-                self.capture = None;
+                self.cancel_capture();
             }
 
             // pied: rappel des gestes
