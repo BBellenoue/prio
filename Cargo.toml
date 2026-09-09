@@ -1,0 +1,19 @@
+[package]
+name = "prio"
+version = "0.1.0"
+edition = "2024"
+description = "A small Windows app for keeping one ordered list of priorities: two global shortcuts, drag and drop, nothing else in the way"
+license = "MIT"
+repository = "https://github.com/BBellenoue/prio"
+readme = "README.md"
+keywords = ["todo", "priorities", "egui", "windows", "productivity"]
+categories = ["gui"]
+publish = false
+
+[dependencies]
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tray-icon = "0.24.2"
+wgpu = { version = "27", default-features = false, features = ["dx12"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
