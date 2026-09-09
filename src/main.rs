@@ -1739,8 +1739,9 @@ fn card(
                 ui.spacing_mut().item_spacing.y = 5.0;
                 let color = if dimmed { MUTED } else { TEXT };
                 ui.label(RichText::new(&t.title).font(FontId::new(15.0, semibold())).color(color));
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend); // chaque element reste entier, le repli se fait entre eux
                     let meta = |s: String| RichText::new(s).size(12.0).color(MUTED);
                     for tag in &t.tags {
                         tag_pill(ui, tag, false);
