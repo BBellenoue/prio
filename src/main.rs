@@ -313,6 +313,7 @@ const SETTINGS_FILE: &str = "settings.json";
 struct Settings {
     hotkey_add: String,
     hotkey_list: String,
+    toggle_close: bool, // le raccourci referme la fenetre si elle est deja ouverte
 }
 
 impl Default for Settings {
@@ -320,6 +321,7 @@ impl Default for Settings {
         Settings {
             hotkey_add: "Ctrl+Alt+A".into(),
             hotkey_list: "Ctrl+Alt+P".into(),
+            toggle_close: true,
         }
     }
 }
@@ -834,15 +836,26 @@ impl eframe::App for Resident {
         match hk {
             HK_LIST => {
                 if self.list_open.load(SeqCst) {
-                    ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of("list"), ViewportCommand::Focus);
+                    // deja ouverte: le raccourci la referme (reglage) ou la ramene devant
+                    let cmd = if load_settings().toggle_close {
+                        ViewportCommand::Close
+                    } else {
+                        ViewportCommand::Focus
+                    };
+                    ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of("list"), cmd);
                 } else {
                     self.list_open.store(true, SeqCst);
                 }
             }
             HK_ADD => {
-                // une seule fenetre d'ajout a la fois: deja ouverte => on la ramene devant
+                // une seule fenetre d'ajout a la fois: deja ouverte => on la referme (reglage) ou on la ramene devant
                 if self.add_open.load(SeqCst) {
-                    ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of("add"), ViewportCommand::Focus);
+                    let cmd = if load_settings().toggle_close {
+                        ViewportCommand::Close
+                    } else {
+                        ViewportCommand::Focus
+                    };
+                    ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of("add"), cmd);
                 } else {
                     *self.add.lock().unwrap() = Add::new();
                     self.add_open.store(true, SeqCst);
@@ -1519,6 +1532,18 @@ impl List {
                     ui.label(RichText::new("déjà pris par une autre application").size(12.0).color(RED));
                 }
             });
+        }
+        ui.add_space(10.0);
+        if ui
+            .checkbox(
+                &mut self.settings.toggle_close,
+                RichText::new("Le raccourci referme la fenêtre si elle est déjà ouverte")
+                    .size(14.0)
+                    .color(TEXT),
+            )
+            .changed()
+        {
+            save_settings(&self.settings);
         }
         ui.add_space(14.0);
         ui.horizontal(|ui| {
