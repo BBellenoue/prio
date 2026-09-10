@@ -1449,7 +1449,8 @@ struct List {
     filter: Option<String>, // tag selectionne en tete de liste
     show_done: bool,
     focused: bool,
-    open: Option<(bool, usize)>, // carte depliee: (archives ?, index)
+    mtime: Option<std::time::SystemTime>, // date de tasks.json au dernier chargement
+    open: Option<(bool, usize)>,          // carte depliee: (archives ?, index)
     copied_at: Option<f64>,
     quit: Option<Arc<std::sync::atomic::AtomicBool>>, // Some en mode resident: bouton "Quitter"
     settings: Settings,
@@ -1471,6 +1472,7 @@ impl List {
             filter: None,
             show_done: false,
             focused: false,
+            mtime: std::fs::metadata(path(FILE)).and_then(|m| m.modified()).ok(),
             open: None,
             copied_at: None,
             quit,
@@ -1592,13 +1594,17 @@ impl List {
     fn ui(&mut self, ctx: &egui::Context) {
         let today = Date::today();
 
-        // Une autre instance (Ctrl+Alt+A) a pu ecrire pendant qu'on etait ouvert.
+        // La fenetre d'ajout (autre viewport ou autre process) ecrit le fichier pendant que la
+        // liste vit en memoire: on recharge des que sa date de modification change, et aussi a la
+        // reprise du focus (filet de securite si l'horodatage ne bouge pas).
         let focused = ctx.input(|i| i.focused);
-        if focused && !self.focused {
+        let mtime = std::fs::metadata(path(FILE)).and_then(|m| m.modified()).ok();
+        if mtime != self.mtime || (focused && !self.focused) {
             self.store = load();
             sort_waiting(&mut self.store.active);
             self.names = names(&self.store);
             self.tags_all = tags_all(&self.store);
+            self.mtime = mtime;
         }
         self.focused = focused;
 
