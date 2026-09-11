@@ -2197,6 +2197,35 @@ fn card(
                     t.waiting = n;
                     out.changed = true;
                 }
+            } else {
+                // Date d'archivage corrigeable (une tache finie hier, archivee aujourd'hui).
+                // Le brouillon vit dans la memoire egui tant que le champ a le focus,
+                // le stockage ne recoit que des dates valides, en ISO.
+                let bid = id.with("arch");
+                let mut buf: String = ui
+                    .ctx()
+                    .data(|d| d.get_temp(bid))
+                    .unwrap_or_else(|| archived.map(Date::fr).unwrap_or_default());
+                let parsed = Date::parse(&buf, today);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("archivé le").size(12.5).color(MUTED));
+                    let mut e = TextEdit::singleline(&mut buf).margin(vec2(10.0, 5.0)).desired_width(110.0);
+                    if parsed.is_none() {
+                        e = e.text_color(RED);
+                    }
+                    let r = ui.add(e);
+                    if r.changed()
+                        && let Some(d) = Date::parse(&buf, today)
+                    {
+                        t.archived = d.iso();
+                        out.changed = true;
+                    }
+                    if r.lost_focus() {
+                        ui.ctx().data_mut(|d| d.remove_temp::<String>(bid));
+                    } else if r.has_focus() {
+                        ui.ctx().data_mut(|d| d.insert_temp(bid, buf.clone()));
+                    }
+                });
             }
             if notes.changed() || wait.as_ref().is_some_and(|w| w.changed()) {
                 out.changed = true;
