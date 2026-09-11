@@ -1816,6 +1816,20 @@ impl List {
         let filter = self.filter.clone();
         let keep = |t: &Task| filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f)));
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            // Pendant un drag, le pointeur pres du bord haut/bas fait defiler la
+            // liste, sinon une carte ne peut pas remonter au-dela de l'ecran.
+            if egui::DragAndDrop::has_any_payload(ui.ctx())
+                && let Some(pos) = ui.ctx().pointer_interact_pos()
+            {
+                let clip = ui.clip_rect();
+                let edge = 48.0;
+                let dy = (clip.top() + edge - pos.y).max(0.0) + (clip.bottom() - edge - pos.y).min(0.0);
+                if dy != 0.0 {
+                    // ponytail: vitesse par frame, pas par seconde; suffisant a 60 Hz.
+                    ui.scroll_with_delta_animation(vec2(0.0, dy * 0.3), egui::style::ScrollAnimation::none());
+                    ui.ctx().request_repaint();
+                }
+            }
             let mut waiting_header = false;
             for (i, t) in self.store.active.iter_mut().enumerate().filter(|(_, t)| keep(t)) {
                 if !t.waiting.is_empty() && !waiting_header {
