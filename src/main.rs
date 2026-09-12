@@ -458,6 +458,7 @@ fn backup() {
         return;
     }
     let dir = path("backup");
+    let _ = std::fs::create_dir_all(&dir);
     let dst = dir.join(format!("tasks.{}.json", Date::today().iso()));
     if dst.exists() {
         return;
@@ -1601,7 +1602,12 @@ impl List {
         let mtime = std::fs::metadata(path(FILE)).and_then(|m| m.modified()).ok();
         if mtime != self.mtime || (focused && !self.focused) {
             self.store = load();
-            sort_waiting(&mut self.store.active);
+            // Nos propres ecritures repassent par ici (la date du fichier change): pas de tri
+            // tant qu'une carte est ouverte, sinon son index designe une autre tache et la
+            // frappe suivante atterrit dedans (chaque lettre sur un ticket different).
+            if self.open.is_none() {
+                sort_waiting(&mut self.store.active);
+            }
             self.names = names(&self.store);
             self.tags_all = tags_all(&self.store);
             self.mtime = mtime;
