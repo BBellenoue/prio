@@ -458,6 +458,7 @@ fn backup() {
         return;
     }
     let dir = path("backup");
+    let _ = std::fs::create_dir_all(&dir);
     let dst = dir.join(format!("tasks.{}.json", Date::today().iso()));
     if dst.exists() {
         return;
@@ -1601,7 +1602,12 @@ impl List {
         let mtime = std::fs::metadata(path(FILE)).and_then(|m| m.modified()).ok();
         if mtime != self.mtime || (focused && !self.focused) {
             self.store = load();
-            sort_waiting(&mut self.store.active);
+            // Nos propres ecritures repassent par ici (la date du fichier change): pas de tri
+            // tant qu'une carte est ouverte, sinon son index designe une autre tache et la
+            // frappe suivante atterrit dedans (chaque lettre sur un ticket different).
+            if self.open.is_none() {
+                sort_waiting(&mut self.store.active);
+            }
             self.names = names(&self.store);
             self.tags_all = tags_all(&self.store);
             self.mtime = mtime;
@@ -1816,6 +1822,20 @@ impl List {
         let filter = self.filter.clone();
         let keep = |t: &Task| filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f)));
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            // Pendant un drag, le pointeur pres du bord haut/bas fait defiler la
+            // liste, sinon une carte ne peut pas remonter au-dela de l'ecran.
+            if egui::DragAndDrop::has_any_payload(ui.ctx())
+                && let Some(pos) = ui.ctx().pointer_interact_pos()
+            {
+                let clip = ui.clip_rect();
+                let edge = 48.0;
+                let dy = (clip.top() + edge - pos.y).max(0.0) + (clip.bottom() - edge - pos.y).min(0.0);
+                if dy != 0.0 {
+                    // ponytail: vitesse par frame, pas par seconde; suffisant a 60 Hz.
+                    ui.scroll_with_delta_animation(vec2(0.0, dy * 0.3), egui::style::ScrollAnimation::none());
+                    ui.ctx().request_repaint();
+                }
+            }
             let mut waiting_header = false;
             for (i, t) in self.store.active.iter_mut().enumerate().filter(|(_, t)| keep(t)) {
                 if !t.waiting.is_empty() && !waiting_header {
@@ -2183,6 +2203,35 @@ fn card(
                     t.waiting = n;
                     out.changed = true;
                 }
+            } else {
+                // Date d'archivage corrigeable (une tache finie hier, archivee aujourd'hui).
+                // Le brouillon vit dans la memoire egui tant que le champ a le focus,
+                // le stockage ne recoit que des dates valides, en ISO.
+                let bid = id.with("arch");
+                let mut buf: String = ui
+                    .ctx()
+                    .data(|d| d.get_temp(bid))
+                    .unwrap_or_else(|| archived.map(Date::fr).unwrap_or_default());
+                let parsed = Date::parse(&buf, today);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("archivé le").size(12.5).color(MUTED));
+                    let mut e = TextEdit::singleline(&mut buf).margin(vec2(10.0, 5.0)).desired_width(110.0);
+                    if parsed.is_none() {
+                        e = e.text_color(RED);
+                    }
+                    let r = ui.add(e);
+                    if r.changed()
+                        && let Some(d) = Date::parse(&buf, today)
+                    {
+                        t.archived = d.iso();
+                        out.changed = true;
+                    }
+                    if r.lost_focus() {
+                        ui.ctx().data_mut(|d| d.remove_temp::<String>(bid));
+                    } else if r.has_focus() {
+                        ui.ctx().data_mut(|d| d.insert_temp(bid, buf.clone()));
+                    }
+                });
             }
             if notes.changed() || wait.as_ref().is_some_and(|w| w.changed()) {
                 out.changed = true;
