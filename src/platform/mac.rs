@@ -42,9 +42,31 @@ pub fn today() -> (i32, u32, u32) {
     super::unix::today()
 }
 
-/// Size of the main screen, in egui points.
-pub fn screen_points(ctx: &egui::Context) -> (f32, f32) {
-    super::unix::screen_points(ctx)
+/// The screen holding the mouse pointer, in egui points. Quartz measures both the pointer
+/// and the screens in the same space as a viewport position, origin at the top left of the
+/// main screen, so nothing has to be flipped.
+pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
+    use core_graphics::display::CGDisplay;
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    let at = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .and_then(CGEvent::new)
+        .map(|e| e.location());
+    if let Ok(p) = at
+        && let Ok(ids) = CGDisplay::active_displays()
+    {
+        for b in ids.into_iter().map(|id| CGDisplay::new(id).bounds()) {
+            let (x, y) = (b.origin.x, b.origin.y);
+            if (x..x + b.size.width).contains(&p.x) && (y..y + b.size.height).contains(&p.y) {
+                return egui::Rect::from_min_size(
+                    egui::pos2(x as f32, y as f32),
+                    egui::vec2(b.size.width as f32, b.size.height as f32),
+                );
+            }
+        }
+    }
+    super::unix::pointer_screen(ctx)
 }
 
 /// The matching global-hotkey shortcut.

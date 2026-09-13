@@ -30,8 +30,15 @@ pub fn today() -> (i32, u32, u32) {
     (st.wYear as i32, st.wMonth as u32, st.wDay as u32)
 }
 
+// ponytail: always the primary monitor, so a window still opens away from the pointer on a
+// multi-screen desktop; GetCursorPos plus MonitorFromPoint is the way up.
+pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
+    let (w, h) = screen_points(ctx);
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))
+}
+
 /// Size of the main screen, in egui points.
-pub fn screen_points(ctx: &egui::Context) -> (f32, f32) {
+fn screen_points(ctx: &egui::Context) -> (f32, f32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
     let ppp = ctx.pixels_per_point();
     unsafe {
