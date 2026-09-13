@@ -424,38 +424,12 @@ fn path(name: &str) -> PathBuf {
     dir.join(name)
 }
 
+/// The store, empty when the file is missing or unreadable.
 fn load() -> Store {
-    if let Ok(s) = std::fs::read_to_string(path(FILE)) {
-        return serde_json::from_str(&s).unwrap_or_default();
-    }
-    // Migration from the old TSV format (archived\tadded\tdeadline\tfrom\ttitle).
-    let tsv = |name: &str| -> Vec<Task> {
-        std::fs::read_to_string(path(name))
-            .unwrap_or_default()
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| {
-                let f: Vec<&str> = l.splitn(5, '\t').collect();
-                let g = |i: usize| f.get(i).map(|s| s.to_string()).unwrap_or_default();
-                Task {
-                    archived: g(0),
-                    added: g(1),
-                    deadline: g(2),
-                    from: g(3),
-                    title: g(4),
-                    ..Default::default()
-                }
-            })
-            .collect()
-    };
-    let store = Store {
-        active: tsv("list.tsv"),
-        done: tsv("done.tsv"),
-    };
-    if !store.active.is_empty() || !store.done.is_empty() {
-        save(&store);
-    }
-    store
+    std::fs::read_to_string(path(FILE))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// Daily backup: before the first write of the day, copy the previous state to
