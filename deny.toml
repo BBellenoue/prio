@@ -2,7 +2,7 @@
 # meme commande en CI (workflow Security).
 
 [graph]
-targets = ["x86_64-pc-windows-msvc"]
+targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin"]
 all-features = true
 
 [advisories]
@@ -11,6 +11,8 @@ yanked = "deny"
 ignore = [
     # ttf-parser (via ab_glyph, via egui) declare non maintenu ; rien a faire ici tant qu'egui ne migre pas.
     { id = "RUSTSEC-2026-0192", reason = "transitive via egui/ab_glyph, pas de correctif amont" },
+    # paste declare non maintenu ; tire par metal, le backend wgpu obligatoire sur macOS.
+    { id = "RUSTSEC-2024-0436", reason = "transitive via wgpu/metal, pas de correctif amont" },
 ]
 
 [licenses]

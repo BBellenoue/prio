@@ -15,8 +15,12 @@ concurrency:
 # Actions pinned to a commit; the comment carries the tag Dependabot tracks.
 jobs:
   check:
-    name: Format, lint, test, build
-    runs-on: windows-latest
+    name: Format, lint, test, build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

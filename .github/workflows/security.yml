@@ -26,8 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Two rules are excluded on purpose:
-      # - unsafe-usage: the resident talks to Win32 (RegisterHotKey, GetMessage, GetLocalTime),
-      #   every unsafe block is an FFI call with fixed arguments;
+      # - unsafe-usage: the resident talks to Win32 (RegisterHotKey, GetMessage, GetLocalTime)
+      #   and to libc on macOS (localtime_r), every unsafe block is an FFI call with fixed
+      #   arguments;
       # - args: std::env::args is only compared against the literal modes "add" / "list" / "cal".
       - name: Scan
         run: >
