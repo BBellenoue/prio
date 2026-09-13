@@ -528,8 +528,8 @@ fn dbg_log(msg: &str) {
 
 /// Position (in egui points) centring a window of `size` points, a little above the middle.
 fn centered(ctx: &egui::Context, size: [f32; 2]) -> egui::Pos2 {
-    let (w, h) = platform::screen_points(ctx);
-    pos2((w - size[0]) / 2.0, (h - size[1]) / 3.0)
+    let s = platform::pointer_screen(ctx);
+    pos2(s.left() + (s.width() - size[0]) / 2.0, s.top() + (s.height() - size[1]) / 3.0)
 }
 
 const LIST_SIZE: [f32; 2] = [520.0, 640.0];
@@ -579,6 +579,7 @@ struct Resident {
     list_pos: Arc<std::sync::Mutex<Option<egui::Pos2>>>, // last position, restored when it reopens
     add: Arc<std::sync::Mutex<Add>>,
     add_open: Arc<std::sync::atomic::AtomicBool>,
+    add_pos: Arc<std::sync::Mutex<Option<egui::Pos2>>>, // fixed while the window lives, so it cannot follow the pointer to another screen
     quit: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -597,6 +598,7 @@ impl Resident {
             list_pos: Default::default(),
             add: Arc::new(std::sync::Mutex::new(Add::default())),
             add_open: Default::default(),
+            add_pos: Default::default(),
             quit,
         }
     }
@@ -656,7 +658,7 @@ impl eframe::App for Resident {
 
         if self.list_open.load(SeqCst) {
             let (list, open, pos) = (self.list.clone(), self.list_open.clone(), self.list_pos.clone());
-            let at = pos.lock().unwrap().unwrap_or_else(|| centered(ctx, LIST_SIZE));
+            let at = *pos.lock().unwrap().get_or_insert_with(|| centered(ctx, LIST_SIZE));
             let builder = window_builder("Prio", LIST_SIZE).with_position(at).with_resizable(true);
             ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("list"), builder, move |ctx, _| {
                 platform::activate(ctx);
@@ -670,14 +672,17 @@ impl eframe::App for Resident {
             });
         }
         if self.add_open.load(SeqCst) {
-            let (add, open) = (self.add.clone(), self.add_open.clone());
+            let (add, open, pos) = (self.add.clone(), self.add_open.clone(), self.add_pos.clone());
+            let at = *pos.lock().unwrap().get_or_insert_with(|| centered(ctx, ADD_SIZE));
             let builder = window_builder("Nouvelle priorité", ADD_SIZE)
-                .with_position(centered(ctx, ADD_SIZE))
+                .with_position(at)
                 .with_resizable(false);
             ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("add"), builder, move |ctx, _| {
                 platform::activate(ctx);
                 add.lock().unwrap().ui(ctx);
                 if ctx.input(|i| i.viewport().close_requested()) {
+                    // the next capture opens on the screen the pointer is on then
+                    *pos.lock().unwrap() = None;
                     open.store(false, SeqCst);
                     ctx.request_repaint_of(egui::ViewportId::ROOT);
                 }

@@ -56,9 +56,10 @@ pub fn today() -> (i32, u32, u32) {
     super::unix::today()
 }
 
-/// Size of the main screen, in egui points.
-pub fn screen_points(ctx: &egui::Context) -> (f32, f32) {
-    super::unix::screen_points(ctx)
+// ponytail: always the screen carrying the origin, so a window still opens away from the
+// pointer on a multi-screen desktop; XineramaQueryScreens plus XQueryPointer is the way up.
+pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
+    super::unix::pointer_screen(ctx)
 }
 
 /// The matching global-hotkey shortcut.

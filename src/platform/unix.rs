@@ -14,10 +14,11 @@ pub fn today() -> (i32, u32, u32) {
     (tm.tm_year + 1900, tm.tm_mon as u32 + 1, tm.tm_mday as u32)
 }
 
-/// Size of the main screen, in egui points.
-pub fn screen_points(ctx: &egui::Context) -> (f32, f32) {
+/// The screen carrying the origin, in egui points: the fallback when the one under the
+/// pointer cannot be named.
+pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
     let size = ctx.input(|i| i.viewport().monitor_size);
-    size.map(|s| (s.x, s.y)).unwrap_or((1440.0, 900.0))
+    egui::Rect::from_min_size(egui::Pos2::ZERO, size.unwrap_or(egui::vec2(1440.0, 900.0)))
 }
 
 /// Sends one command to the resident. false when no resident answers.

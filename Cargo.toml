@@ -26,6 +26,7 @@ global-hotkey = "0.8"
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.23"
 wgpu = { version = "27", default-features = false, features = ["metal"] }
 winit = { version = "0.30", default-features = false }
 
