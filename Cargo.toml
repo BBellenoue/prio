@@ -34,3 +34,4 @@ winit = { version = "0.30", default-features = false }
 eframe = { version = "0.33", default-features = false, features = ["x11"] }
 gtk = "0.18"
 wgpu = { version = "27", default-features = false, features = ["vulkan"] }
+x11-dl = "2.21"

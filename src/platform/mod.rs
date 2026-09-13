@@ -109,6 +109,16 @@ pub fn hotkey_label(key: eframe::egui::Key, mods: eframe::egui::Modifiers) -> Op
     parse_hotkey(&label).map(|_| label)
 }
 
+/// The screen holding that point, among rectangles given as (x, y, width, height) in one
+/// unit. The first match wins: overlapping screens mirror the same place.
+pub fn screen_at(x: f32, y: f32, screens: &[(f32, f32, f32, f32)]) -> Option<eframe::egui::Rect> {
+    use eframe::egui::{Rect, pos2, vec2};
+    screens
+        .iter()
+        .find(|(sx, sy, w, h)| (*sx..sx + w).contains(&x) && (*sy..sy + h).contains(&y))
+        .map(|&(x, y, w, h)| Rect::from_min_size(pos2(x, y), vec2(w, h)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +149,18 @@ mod tests {
         };
         assert_eq!(hotkey_label(egui::Key::A, m), Some("Ctrl+Alt+A".into()));
         assert_eq!(hotkey_label(egui::Key::A, egui::Modifiers::default()), None);
+    }
+
+    #[test]
+    fn screen_under_pointer() {
+        // a laptop with a wider screen up and to its left, the layout that broke the placement
+        let two = [(0.0, 0.0, 1800.0, 1169.0), (-3360.0, -721.0, 3360.0, 1890.0)];
+        let at = |x, y| screen_at(x, y, &two).map(|r| (r.left(), r.top(), r.width(), r.height()));
+        assert_eq!(at(900.0, 500.0), Some(two[0]));
+        assert_eq!(at(-1900.0, 400.0), Some(two[1]));
+        assert_eq!(at(0.0, 0.0), Some(two[0])); // the seam belongs to the screen starting there
+        assert_eq!(at(-0.5, 0.0), Some(two[1]));
+        assert_eq!(at(1800.0, 0.0), None); // just past the right edge, no screen there
+        assert_eq!(screen_at(0.0, 0.0, &[]), None);
     }
 }

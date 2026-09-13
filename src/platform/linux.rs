@@ -56,10 +56,46 @@ pub fn today() -> (i32, u32, u32) {
     super::unix::today()
 }
 
-// ponytail: always the screen carrying the origin, so a window still opens away from the
-// pointer on a multi-screen desktop; XineramaQueryScreens plus XQueryPointer is the way up.
+/// The screen holding the mouse pointer, in egui points. X11 counts both the pointer and the
+/// screens in physical pixels from the top left of the virtual screen, the corner a viewport
+/// position also counts from, so only the scale has to come out.
 pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
-    super::unix::pointer_screen(ctx)
+    let ppp = ctx.pixels_per_point();
+    match screen_at_pointer() {
+        Some(r) => egui::Rect::from_min_size(r.min / ppp, r.size() / ppp),
+        None => super::unix::pointer_screen(ctx),
+    }
+}
+
+/// XQueryPointer on the root window, then the Xinerama screen holding it, in pixels. A
+/// connection of its own: GTK runs on the tray thread and is not shared.
+fn screen_at_pointer() -> Option<egui::Rect> {
+    let xlib = x11_dl::xlib::Xlib::open().ok()?;
+    let xinerama = x11_dl::xinerama::Xlib::open().ok()?;
+    unsafe {
+        let dpy = (xlib.XOpenDisplay)(std::ptr::null());
+        if dpy.is_null() {
+            return None;
+        }
+        let root = (xlib.XDefaultRootWindow)(dpy);
+        let (mut win, mut child): (x11_dl::xlib::Window, x11_dl::xlib::Window) = (0, 0);
+        let (mut px, mut py, mut wx, mut wy) = (0, 0, 0, 0);
+        let mut mask = 0;
+        let on_screen = (xlib.XQueryPointer)(dpy, root, &mut win, &mut child, &mut px, &mut py, &mut wx, &mut wy, &mut mask) != 0;
+        let mut count = 0;
+        let screens = (xinerama.XineramaQueryScreens)(dpy, &mut count);
+        let mut found = None;
+        if on_screen && !screens.is_null() {
+            let heads: Vec<(f32, f32, f32, f32)> = std::slice::from_raw_parts(screens, count.max(0) as usize)
+                .iter()
+                .map(|s| (f32::from(s.x_org), f32::from(s.y_org), f32::from(s.width), f32::from(s.height)))
+                .collect();
+            found = super::screen_at(px as f32, py as f32, &heads);
+            (xlib.XFree)(screens.cast());
+        }
+        (xlib.XCloseDisplay)(dpy);
+        found
+    }
 }
 
 /// The matching global-hotkey shortcut.
