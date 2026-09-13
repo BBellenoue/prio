@@ -28,7 +28,10 @@ A few things that are easy to miss:
   clean. Windows is reachable from any machine:
   `rustup target add x86_64-pc-windows-msvc` then
   `cargo clippy --target x86_64-pc-windows-msvc -- -D warnings` type checks
-  Windows with no linking and no Windows machine. Linux does not cross check
+  Windows with no linking and no Windows machine. macOS works the same way:
+  `rustup target add aarch64-apple-darwin` then
+  `cargo clippy --target aarch64-apple-darwin -- -D warnings`, no SDK needed,
+  which also covers `unix.rs`. Linux does not cross check
   as cheaply, since its backend wants GTK and X11 headers for the target, so a
   Linux box or a virtual machine stays the way. Runtime behaviour, a screen
   scale or a system call, wants the real system either way.
