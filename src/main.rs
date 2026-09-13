@@ -520,8 +520,8 @@ fn main() -> eframe::Result {
     let arg = std::env::args().nth(1).unwrap_or_default();
     let cal = std::env::args().nth(2).as_deref() == Some("cal");
     let (title, size) = match arg.as_str() {
-        "add" => ("Nouvelle priorité", [ADD_SIZE[0], ADD_SIZE[1] + if cal { CAL_HEIGHT } else { 0.0 }]),
-        "list" => ("Prio", LIST_SIZE),
+        "add" => (ADD_TITLE, [ADD_SIZE[0], ADD_SIZE[1] + if cal { CAL_HEIGHT } else { 0.0 }]),
+        "list" => (LIST_TITLE, LIST_SIZE),
         _ => ("prio-resident", [1.0, 1.0]),
     };
     let resident = arg.is_empty();
@@ -535,7 +535,7 @@ fn main() -> eframe::Result {
         if platform::wake_resident() {
             return Ok(());
         }
-        return main_with("Prio", LIST_SIZE, false, hotkey, hk_status, ctx_cell);
+        return main_with(LIST_TITLE, LIST_SIZE, false, hotkey, hk_status, ctx_cell);
     }
     main_with(title, size, resident, hotkey, hk_status, ctx_cell)
 }
@@ -548,7 +548,7 @@ fn main_with(
     hk_status: Arc<std::sync::atomic::AtomicUsize>,
     ctx_cell: Arc<std::sync::OnceLock<egui::Context>>,
 ) -> eframe::Result {
-    let mut viewport = window_builder(title, size).with_resizable(title == "Prio");
+    let mut viewport = window_builder(title, size).with_resizable(title == LIST_TITLE);
     if resident {
         viewport = viewport
             .with_position(pos2(0.0, 0.0))
@@ -572,8 +572,8 @@ fn main_with(
             let cell = ctx_cell.clone();
             dbg_log(&format!("app created: {title}"));
             Ok(match title {
-                "Nouvelle priorité" => Box::new(Add::new()) as Box<dyn eframe::App>,
-                "Prio" => Box::new(List::new(None, None)),
+                ADD_TITLE => Box::new(Add::new()) as Box<dyn eframe::App>,
+                LIST_TITLE => Box::new(List::new(None, None)),
                 _ => {
                     let r = Resident::new(cell, hotkey, hk_status);
                     // testing without a keyboard: PRIO_TEST_HOTKEY=1|2 fires either shortcut at startup
@@ -661,15 +661,62 @@ fn logo_rgba(size: usize) -> Vec<u8> {
 
 // ---------- resident: the root pixel and its child viewports ----------
 
+/// A child window of the resident: its state, whether it is on screen, and where it opens
+/// next. Everything is shared, the deferred viewport callback outlives the frame.
+struct Child<A> {
+    app: Arc<std::sync::Mutex<A>>,
+    open: Arc<std::sync::atomic::AtomicBool>,
+    pos: Arc<std::sync::Mutex<Option<egui::Pos2>>>,
+}
+
+impl<A: Send + 'static> Child<A> {
+    fn new(app: A) -> Child<A> {
+        Child {
+            app: Arc::new(std::sync::Mutex::new(app)),
+            open: Default::default(),
+            pos: Default::default(),
+        }
+    }
+
+    /// Shows the window while `open` is set. `left` runs when it closes and says where it
+    /// opens next: None, the screen the pointer is on then.
+    fn show(
+        &self,
+        ctx: &egui::Context,
+        title: &'static str,
+        size: [f32; 2],
+        resizable: bool,
+        ui: fn(&mut A, &egui::Context),
+        left: fn(&mut A, &egui::Context) -> Option<egui::Pos2>,
+    ) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if !self.open.load(SeqCst) {
+            return;
+        }
+        let (app, open, pos) = (self.app.clone(), self.open.clone(), self.pos.clone());
+        let at = *pos.lock().unwrap().get_or_insert_with(|| centered(ctx, size));
+        let builder = window_builder(title, size).with_position(at).with_resizable(resizable);
+        ctx.show_viewport_deferred(egui::ViewportId::from_hash_of(title), builder, move |ctx, _| {
+            platform::activate(ctx);
+            let mut app = app.lock().unwrap();
+            ui(&mut app, ctx);
+            if ctx.input(|i| i.viewport().close_requested()) {
+                *pos.lock().unwrap() = left(&mut app, ctx);
+                open.store(false, SeqCst);
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
+            }
+        });
+    }
+}
+
+const LIST_TITLE: &str = "Prio";
+const ADD_TITLE: &str = "Nouvelle priorité";
+
 struct Resident {
     rt: platform::Runtime,
     hotkey: Arc<std::sync::atomic::AtomicUsize>,
-    list: Arc<std::sync::Mutex<List>>,
-    list_open: Arc<std::sync::atomic::AtomicBool>,
-    list_pos: Arc<std::sync::Mutex<Option<egui::Pos2>>>, // last position, restored when it reopens
-    add: Arc<std::sync::Mutex<Add>>,
-    add_open: Arc<std::sync::atomic::AtomicBool>,
-    add_pos: Arc<std::sync::Mutex<Option<egui::Pos2>>>, // fixed while the window lives, so it cannot follow the pointer to another screen
+    list: Child<List>,
+    add: Child<Add>,
     quit: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -683,12 +730,8 @@ impl Resident {
         Resident {
             rt: platform::Runtime::start(ctx, hotkey.clone(), hk_status.clone()),
             hotkey,
-            list: Arc::new(std::sync::Mutex::new(List::new(Some(quit.clone()), Some(hk_status)))),
-            list_open: Default::default(),
-            list_pos: Default::default(),
-            add: Arc::new(std::sync::Mutex::new(Add::default())),
-            add_open: Default::default(),
-            add_pos: Default::default(),
+            list: Child::new(List::new(Some(quit.clone()), Some(hk_status))),
+            add: Child::new(Add::default()),
             quit,
         }
     }
@@ -709,75 +752,42 @@ impl eframe::App for Resident {
         if hk != 0 {
             dbg_log(&format!(
                 "resident: hotkey {hk} list_open={} add_open={}",
-                self.list_open.load(SeqCst),
-                self.add_open.load(SeqCst)
+                self.list.open.load(SeqCst),
+                self.add.open.load(SeqCst)
             ));
         }
-        match hk {
-            HK_LIST => {
-                if self.list_open.load(SeqCst) {
-                    // already open: the shortcut closes it (a setting) or brings it to the front
-                    let cmd = if load_settings().toggle_close {
-                        ViewportCommand::Close
-                    } else {
-                        ViewportCommand::Focus
-                    };
-                    ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of("list"), cmd);
+        // A shortcut opens its window. Already open, it closes it (a setting) or brings it
+        // to the front. One capture window at a time, fresh each time.
+        let target = match hk {
+            HK_LIST => Some((&self.list.open, LIST_TITLE)),
+            HK_ADD => Some((&self.add.open, ADD_TITLE)),
+            _ => None,
+        };
+        if let Some((open, title)) = target {
+            if open.load(SeqCst) {
+                let cmd = if load_settings().toggle_close {
+                    ViewportCommand::Close
                 } else {
-                    self.list_open.store(true, SeqCst);
+                    ViewportCommand::Focus
+                };
+                ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of(title), cmd);
+            } else {
+                if hk == HK_ADD {
+                    *self.add.app.lock().unwrap() = Add::new();
                 }
+                open.store(true, SeqCst);
             }
-            HK_ADD => {
-                // one capture window at a time: already open, so close it (a setting) or bring it to the front
-                if self.add_open.load(SeqCst) {
-                    let cmd = if load_settings().toggle_close {
-                        ViewportCommand::Close
-                    } else {
-                        ViewportCommand::Focus
-                    };
-                    ctx.send_viewport_cmd_to(egui::ViewportId::from_hash_of("add"), cmd);
-                } else {
-                    *self.add.lock().unwrap() = Add::new();
-                    self.add_open.store(true, SeqCst);
-                }
-            }
-            _ => {}
         }
         // The root (1 px, click through) has nothing to draw.
         egui::CentralPanel::default().frame(Frame::NONE).show(ctx, |_| {});
 
-        if self.list_open.load(SeqCst) {
-            let (list, open, pos) = (self.list.clone(), self.list_open.clone(), self.list_pos.clone());
-            let at = *pos.lock().unwrap().get_or_insert_with(|| centered(ctx, LIST_SIZE));
-            let builder = window_builder("Prio", LIST_SIZE).with_position(at).with_resizable(true);
-            ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("list"), builder, move |ctx, _| {
-                platform::activate(ctx);
-                list.lock().unwrap().ui(ctx);
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    list.lock().unwrap().cancel_capture();
-                    *pos.lock().unwrap() = ctx.input(|i| i.viewport().outer_rect).map(|r| r.min);
-                    open.store(false, SeqCst);
-                    ctx.request_repaint_of(egui::ViewportId::ROOT);
-                }
-            });
-        }
-        if self.add_open.load(SeqCst) {
-            let (add, open, pos) = (self.add.clone(), self.add_open.clone(), self.add_pos.clone());
-            let at = *pos.lock().unwrap().get_or_insert_with(|| centered(ctx, ADD_SIZE));
-            let builder = window_builder("Nouvelle priorité", ADD_SIZE)
-                .with_position(at)
-                .with_resizable(false);
-            ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("add"), builder, move |ctx, _| {
-                platform::activate(ctx);
-                add.lock().unwrap().ui(ctx);
-                if ctx.input(|i| i.viewport().close_requested()) {
-                    // the next capture opens on the screen the pointer is on then
-                    *pos.lock().unwrap() = None;
-                    open.store(false, SeqCst);
-                    ctx.request_repaint_of(egui::ViewportId::ROOT);
-                }
-            });
-        }
+        // The list reopens where it was left; the capture window opens on the screen the
+        // pointer is on then, and stays put while it lives.
+        self.list.show(ctx, LIST_TITLE, LIST_SIZE, true, List::ui, |list, ctx| {
+            list.cancel_capture();
+            ctx.input(|i| i.viewport().outer_rect).map(|r| r.min)
+        });
+        self.add.show(ctx, ADD_TITLE, ADD_SIZE, false, Add::ui, |_, _| None);
     }
 }
 
