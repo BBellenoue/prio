@@ -1,6 +1,6 @@
 # Prio - project rules
 
-Priority list in Rust (egui/eframe, wgpu), Windows and macOS. One crate:
+Priority list in Rust (egui/eframe, wgpu), Windows, macOS and Linux (X11). One crate:
 `src/main.rs` for everything that does not depend on the system,
 `src/platform/` for the rest (one file per system, same surface). Read `README.md` for what it does
 and `CONTRIBUTING.md` for the checks; this file is what an agent must know
@@ -16,6 +16,7 @@ cargo build --release
 
 ```sh
 ./install-macos.sh             # kills the resident, rebuilds Prio.app and the login agent
+./install-linux.sh             # installs to ~/.local/bin plus an autostart entry
 ```
 
 The release binary is locked while the resident runs on Windows: stop
@@ -31,9 +32,11 @@ does it.
   stay in French, accents included: the interface is French.
 - Deliberate shortcuts carry a `ponytail:` comment naming the ceiling and the
   upgrade path.
-- System-specific code goes in `src/platform/{win,mac}.rs`, behind the same
-  functions; no `cfg` in the UI. Both backends must keep working, CI builds
-  them.
+- System-specific code goes in `src/platform/{win,mac,linux}.rs`, behind the
+  same functions; no `cfg` in the UI. What macOS and Linux share sits in
+  `unix.rs`. The three backends must keep working, CI builds them.
+- Linux means X11: the global shortcuts are X11 key grabs, and Wayland does
+  not hand those to an application.
 - The egui context lock is not reentrant: never read the context (`has_focus`,
   `input`, `memory`) inside a `data_mut` / `memory_mut` closure. It froze the
   window once; compute first, then write.
@@ -46,11 +49,12 @@ does it.
 - Subject in the imperative, no period, no prefix, no ticket number, under
   72 characters. Body explains why and what was verified.
 - Never commit anything from the data folder (`%APPDATA%\prio`,
-  `~/Library/Application Support/prio`: tasks, backups, `debug.log`,
+  `~/Library/Application Support/prio`, `~/.local/share/prio`: tasks, backups,
+  `debug.log`,
   `resident.tid`), nor `.claude/`, nor a real person's name, hostname, path or
   credential. Tests use made-up names and `example.com`.
-- Run the three checks above before committing; CI runs them on Windows and
-  macOS.
+- Run the three checks above before committing; CI runs them on Windows, macOS
+  and Linux.
 
 ## Verifying the resident without a keyboard
 

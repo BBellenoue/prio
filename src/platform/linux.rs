@@ -1,5 +1,8 @@
-//! macOS backend: Carbon global shortcuts (the global-hotkey crate), the menu bar,
-//! ~/Library/Application Support, and a unix socket to reach the resident.
+//! Linux backend: X11 global shortcuts (the global-hotkey crate), a notification area icon on
+//! a GTK thread, the XDG data folder, and a unix socket to reach the resident.
+//!
+//! X11 only: under Wayland a client cannot grab a key combination for itself, and the desktop
+//! portal that replaces it is not something global-hotkey speaks.
 
 use super::{HK_ADD, HK_ADD_FAILED, HK_LIST, HK_LIST_FAILED, HK_QUIT, Hotkey, HotkeyKey};
 use crate::{dbg_log, load_settings, logo_rgba, path};
@@ -12,30 +15,41 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-pub const DEFAULT_HOTKEY_ADD: &str = "Cmd+Alt+A";
-pub const DEFAULT_HOTKEY_LIST: &str = "Cmd+Alt+P";
-pub const MODS_HINT: &str = "Cmd, Ctrl et/ou Alt (Shift en plus si besoin)";
-pub const CMD_LABEL: &str = "Cmd";
+pub const DEFAULT_HOTKEY_ADD: &str = "Ctrl+Alt+A";
+pub const DEFAULT_HOTKEY_LIST: &str = "Ctrl+Alt+P";
+pub const MODS_HINT: &str = "Ctrl et/ou Alt (Shift en plus si besoin)";
+pub const CMD_LABEL: &str = "Ctrl";
 pub const FONT_REGULAR: &[(&str, u32)] = &[
-    ("/System/Library/Fonts/SFNS.ttf", 0),
-    ("/System/Library/Fonts/HelveticaNeue.ttc", 0),
+    ("/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf", 0),
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
+    ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", 0),
 ];
-pub const FONT_SEMIBOLD: &[(&str, u32)] = &[("/System/Library/Fonts/HelveticaNeue.ttc", 10)];
+pub const FONT_SEMIBOLD: &[(&str, u32)] = &[
+    ("/usr/share/fonts/truetype/ubuntu/Ubuntu-M.ttf", 0),
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 0),
+    ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 0),
+];
 
 const SOCK_FILE: &str = "prio.sock";
 const CMD_RELOAD: usize = 1;
 const CMD_SUSPEND: usize = 2;
+const ID_LIST: &str = "prio-list";
+const ID_ADD: &str = "prio-add";
+const ID_QUIT: &str = "prio-quit";
 
-/// Commands received on the socket, applied by `Runtime::tick`: Carbon wants the main
-/// thread to register or unregister a shortcut.
+/// Commands received on the socket, applied by `Runtime::tick`.
 static CMD: AtomicUsize = AtomicUsize::new(0);
 /// global-hotkey ids of the two current shortcuts, capture first, list second.
 static IDS: Mutex<[u32; 2]> = Mutex::new([0, 0]);
 
 pub fn data_dir() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Library/Application Support/prio")
+    match std::env::var("XDG_DATA_HOME") {
+        Ok(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"),
+    }
+    .join("prio")
 }
 
 pub fn today() -> (i32, u32, u32) {
@@ -81,7 +95,7 @@ pub fn notify_hotkeys_changed() {
 }
 
 /// Suspends the global shortcuts for the time of a capture: otherwise the combination being
-/// pressed (Cmd+Alt+A, say) opens the window instead of staying with the panel.
+/// pressed (Ctrl+Alt+A, say) opens the window instead of staying with the panel.
 pub fn suspend_hotkeys() {
     send("suspend\n");
 }
@@ -111,12 +125,11 @@ pub fn start_resident(ctx: Arc<OnceLock<egui::Context>>, flag: Arc<AtomicUsize>,
     })
 }
 
-/// Global shortcuts and the menu bar icon. Carbon and AppKit demand the main thread: both
-/// are built in eframe's creation closure and driven by `tick`.
+/// Global shortcuts and the notification area icon. The X11 shortcuts run on a thread of their
+/// own inside global-hotkey; the icon needs a GTK loop, which gets its own thread too.
 pub struct Runtime {
     manager: Option<GlobalHotKeyManager>,
-    tray: Option<TrayIcon>,
-    menu: Option<(MenuItem, MenuItem)>, // list, capture
+    menu: Option<std::sync::mpsc::Sender<(String, String)>>, // list label, capture label
     registered: Vec<HotKey>,
     status: Arc<AtomicUsize>,
 }
@@ -126,29 +139,18 @@ impl Runtime {
         let manager = GlobalHotKeyManager::new()
             .inspect_err(|e| dbg_log(&format!("GlobalHotKeyManager: {e}")))
             .ok();
+        let (tx, rx) = std::sync::mpsc::channel();
         let settings = load_settings();
-        let m_list = MenuItem::new(format!("Prio\t{}", settings.hotkey_list), true, None);
-        let m_add = MenuItem::new(format!("Ajouter\t{}", settings.hotkey_add), true, None);
-        let m_quit = MenuItem::new("Quitter", true, None);
-        let menu = Menu::new();
-        let _ = menu.append_items(&[&m_list, &m_add, &PredefinedMenuItem::separator(), &m_quit]);
-        let mut builder = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
-            .with_tooltip(format!("Prio  ·  {}", settings.hotkey_list))
-            .with_icon_as_template(true)
-            .with_menu_on_left_click(false);
-        if let Ok(i) = tray_icon::Icon::from_rgba(template_rgba(), 32, 32) {
-            builder = builder.with_icon(i);
-        }
-        let tray = builder.build().inspect_err(|e| dbg_log(&format!("tray: {e}"))).ok();
-
-        let ids = (m_list.id().clone(), m_add.id().clone(), m_quit.id().clone());
-        std::thread::spawn(move || pump(ids, ctx, flag));
+        let labels = (
+            format!("Prio\t{}", settings.hotkey_list),
+            format!("Ajouter\t{}", settings.hotkey_add),
+        );
+        std::thread::spawn(move || tray_thread(labels, rx));
+        std::thread::spawn(move || pump(ctx, flag));
 
         let mut rt = Runtime {
             manager,
-            tray,
-            menu: Some((m_list, m_add)),
+            menu: Some(tx),
             registered: Vec::new(),
             status,
         };
@@ -201,23 +203,47 @@ impl Runtime {
             "register_hotkeys {:?}/{:?} -> failures={bits}",
             s.hotkey_add, s.hotkey_list
         ));
-        if let Some((m_list, m_add)) = &self.menu {
-            m_list.set_text(format!("Prio\t{}", s.hotkey_list));
-            m_add.set_text(format!("Ajouter\t{}", s.hotkey_add));
-        }
-        if let Some(t) = &self.tray {
-            let _ = t.set_tooltip(Some(format!("Prio  ·  {}", s.hotkey_list)));
+        if let Some(tx) = &self.menu {
+            let _ = tx.send((format!("Prio\t{}", s.hotkey_list), format!("Ajouter\t{}", s.hotkey_add)));
         }
     }
 }
 
-/// The waking thread: events arrive on global channels, the interface is repainted on
-/// demand.
-fn pump(
-    (id_list, id_add, id_quit): (tray_icon::menu::MenuId, tray_icon::menu::MenuId, tray_icon::menu::MenuId),
-    ctx: Arc<OnceLock<egui::Context>>,
-    flag: Arc<AtomicUsize>,
-) {
+/// The notification area icon lives here: GTK wants its own loop, and the menu items can only
+/// be touched from the thread that built them, so new labels arrive through a channel.
+fn tray_thread((list_label, add_label): (String, String), labels: std::sync::mpsc::Receiver<(String, String)>) {
+    if gtk::init().is_err() {
+        dbg_log("gtk::init failed: no notification area icon");
+        return;
+    }
+    let m_list = MenuItem::with_id(ID_LIST, list_label, true, None);
+    let m_add = MenuItem::with_id(ID_ADD, add_label, true, None);
+    let m_quit = MenuItem::with_id(ID_QUIT, "Quitter", true, None);
+    let menu = Menu::new();
+    let _ = menu.append_items(&[&m_list, &m_add, &PredefinedMenuItem::separator(), &m_quit]);
+    let mut builder = TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip(format!("Prio  ·  {}", load_settings().hotkey_list));
+    if let Ok(i) = tray_icon::Icon::from_rgba(logo_rgba(32), 32, 32) {
+        builder = builder.with_icon(i);
+    }
+    let tray = builder.build().inspect_err(|e| dbg_log(&format!("tray: {e}"))).ok();
+
+    gtk::glib::timeout_add_local(Duration::from_millis(300), move || {
+        while let Ok((list, add)) = labels.try_recv() {
+            m_list.set_text(&list);
+            m_add.set_text(&add);
+            if let Some(t) = &tray {
+                let _ = t.set_tooltip(Some(list.replace('\t', "  ·  ")));
+            }
+        }
+        gtk::glib::ControlFlow::Continue
+    });
+    gtk::main();
+}
+
+/// The waking thread: events arrive on global channels, the interface is repainted on demand.
+fn pump(ctx: Arc<OnceLock<egui::Context>>, flag: Arc<AtomicUsize>) {
     let fire = |n: usize| {
         flag.store(n, SeqCst);
         if let Some(c) = ctx.get() {
@@ -237,15 +263,11 @@ fn pump(
             }
         }
         while let Ok(e) = MenuEvent::receiver().try_recv() {
-            let id = e.id();
-            fire(if *id == id_list {
-                HK_LIST
-            } else if *id == id_add {
-                HK_ADD
-            } else if *id == id_quit {
-                HK_QUIT
-            } else {
-                0
+            fire(match e.id().as_ref() {
+                ID_LIST => HK_LIST,
+                ID_ADD => HK_ADD,
+                ID_QUIT => HK_QUIT,
+                _ => 0,
             });
         }
         while let Ok(e) = TrayIconEvent::receiver().try_recv() {
@@ -261,21 +283,8 @@ fn pump(
     }
 }
 
-/// Menu bar icon: a template image keeps only the alpha, so the bars of the logo become
-/// holes and the tint follows the system appearance.
-fn template_rgba() -> Vec<u8> {
-    let mut px = logo_rgba(32);
-    for p in px.as_chunks_mut::<4>().0 {
-        if p[0] < 0x40 {
-            p[3] = 0;
-        }
-        p[..3].copy_from_slice(&[0, 0, 0]);
-    }
-    px
-}
-
-/// Without a Dock icon, a window opened by a shortcut does not get the keyboard, and NSApp
-/// ignores the request until it is on screen: keep asking over the first few passes.
+/// A window opened by a shortcut does not always come to the front: ask, over the first few
+/// passes, until the window manager has given it the keyboard.
 pub fn activate(ctx: &egui::Context) {
     if ctx.cumulative_pass_nr() < 10 && !ctx.input(|i| i.viewport().focused.unwrap_or(false)) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -283,10 +292,5 @@ pub fn activate(ctx: &egui::Context) {
     }
 }
 
-/// A menu bar application: no Dock icon, no Cmd+Tab entry.
-pub fn configure(opts: &mut eframe::NativeOptions) {
-    use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-    opts.event_loop_builder = Some(Box::new(|b| {
-        b.with_activation_policy(ActivationPolicy::Accessory);
-    }));
-}
+/// Nothing to set on the window side: eframe is enough.
+pub fn configure(_: &mut eframe::NativeOptions) {}

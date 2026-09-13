@@ -1,6 +1,14 @@
 //! What depends on the system: data folder, local date, fonts, screen size, global
 //! shortcuts, notification area or menu bar icon, and how the resident is woken.
 
+#[cfg(unix)]
+mod unix;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;
+
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "macos")]

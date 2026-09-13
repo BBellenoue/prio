@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue.svg" alt="Licence: MIT"></a>
 </p>
 
-A small desktop app, Windows and macOS, for keeping one ordered list of
+A small desktop app, Windows, macOS and Linux, for keeping one ordered list of
 priorities. Two global shortcuts, drag and drop to reorder, and nothing else in
 the way.
 
@@ -21,7 +21,7 @@ makes the list honest about what is rotting.
 
 ## Features
 
-Shortcuts below are the Windows defaults; on macOS the same two are
+Shortcuts below are the Windows and Linux defaults; on macOS the same two are
 **Cmd+Alt+A** and **Cmd+Alt+P**. Both are yours to change.
 
 - **Ctrl+Alt+A**: capture a priority. Title, who asked, an optional deadline
@@ -51,13 +51,14 @@ Shortcuts below are the Windows defaults; on macOS the same two are
   or Space). Applied
   at once; a combination another application already holds is flagged.
 
-Dark, frameless windows drawn with the system's own font, Segoe UI on Windows
-and San Francisco on macOS; no assets shipped.
+Dark, frameless windows drawn with the system's own font, Segoe UI on Windows,
+San Francisco on macOS, Ubuntu or DejaVu on Linux; no assets shipped.
 
 ## Data
 
 Everything lives in `%APPDATA%\prio\` on Windows, in
-`~/Library/Application Support/prio/` on macOS:
+`~/Library/Application Support/prio/` on macOS, in `~/.local/share/prio/` on
+Linux:
 
 | File | Content |
 |---|---|
@@ -82,7 +83,9 @@ ln -s ~/OneDrive/prio ~/Library/Application\ Support/prio
 
 ## Install
 
-Requires Windows 10 or 11, or macOS 11 and later.
+Requires Windows 10 or 11, macOS 11 and later, or a Linux desktop running an
+**X11 session**: under Wayland an application cannot reserve a key combination
+for itself, and the two global shortcuts are the whole point.
 
 Without a toolchain: download the archive for your system from the latest
 [release](https://github.com/BBellenoue/prio/releases), unpack it anywhere
@@ -108,6 +111,15 @@ The script wraps the binary in `~/Applications/Prio.app` (an `LSUIElement`
 bundle: menu bar, no Dock icon) and registers a session agent that starts it
 at login.
 
+```sh
+sudo apt install libgtk-3-dev libxdo-dev libayatana-appindicator3-dev libxkbcommon-x11-dev
+cargo build --release
+./install-linux.sh
+```
+
+The script puts the binary in `~/.local/bin`, a launcher in the applications
+menu and an autostart entry, then starts it.
+
 To stop it: right click the icon, *Quitter*, or the *Quitter* link at the
 bottom of the list.
 
@@ -130,8 +142,10 @@ and reads top to bottom:
 data folder, local date, system fonts, screen size, global shortcuts, icon and
 menu, and how a second launch reaches the resident. `mod.rs` parses a shortcut
 into a neutral combination that each backend then translates, `win.rs` into
-`RegisterHotKey` and a Win32 message loop, `mac.rs` into Carbon hotkeys, a
-menu bar item and a unix socket.
+`RegisterHotKey` and a Win32 message loop, `mac.rs` into Carbon hotkeys and a
+menu bar item, `linux.rs` into X11 key grabs and a GTK tray thread. `unix.rs`
+carries what macOS and Linux share: the local date, the screen size, and the
+socket a second launch writes to.
 
 ## Development
 
@@ -141,7 +155,7 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
-CI runs those on Windows and macOS. A second workflow runs Semgrep, Trivy,
+CI runs those on Windows, macOS and Linux. A second workflow runs Semgrep, Trivy,
 cargo-deny and Gitleaks on every push and every Monday, with findings in the repository's
 Security tab; `cargo deny check` runs the same advisory and licence checks
 locally.

@@ -11,7 +11,7 @@ cargo test
 cargo build --release
 ```
 
-The same steps run in CI on every pull request, on Windows and on macOS,
+The same steps run in CI on every pull request, on Windows, macOS and Linux,
 alongside a
 security workflow (Semgrep, Trivy, cargo-deny, Gitleaks). A new dependency has
 to pass `cargo deny check`: no unpatched RustSec advisory, a licence in the
@@ -21,8 +21,10 @@ A few things that are easy to miss:
 
 - **Everything system-specific lives in `src/platform/`.** One file per system
   behind the same functions, no `cfg` scattered through the UI. A change that
-  touches the shortcuts, the tray icon or the data folder has to land in both
-  `win.rs` and `mac.rs`, and CI builds both.
+  touches the shortcuts, the tray icon or the data folder has to land in
+  `win.rs`, `mac.rs` and `linux.rs`, and CI builds all three.
+- **Linux means X11.** Global shortcuts rest on X11 key grabs; a Wayland
+  session cannot give them to an ordinary application.
 - **No assets.** Fonts come from the system, the icons are drawn in code. Keep
   it that way.
 - **No personal data.** Task files, backups and debug logs live in the user's
