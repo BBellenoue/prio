@@ -623,7 +623,9 @@ fn dbg_log(msg: &str) {
 /// Position (in egui points) centring a window of `size` points, a little above the middle.
 fn centered(ctx: &egui::Context, size: [f32; 2]) -> egui::Pos2 {
     let s = platform::pointer_screen(ctx);
-    pos2(s.left() + (s.width() - size[0]) / 2.0, s.top() + (s.height() - size[1]) / 3.0)
+    let at = pos2(s.left() + (s.width() - size[0]) / 2.0, s.top() + (s.height() - size[1]) / 3.0);
+    dbg_log(&format!("screen under the pointer {s:?} -> window at {at:?}"));
+    at
 }
 
 const LIST_SIZE: [f32; 2] = [520.0, 640.0];

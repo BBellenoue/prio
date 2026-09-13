@@ -56,14 +56,13 @@ pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
     if let Ok(p) = at
         && let Ok(ids) = CGDisplay::active_displays()
     {
-        for b in ids.into_iter().map(|id| CGDisplay::new(id).bounds()) {
-            let (x, y) = (b.origin.x, b.origin.y);
-            if (x..x + b.size.width).contains(&p.x) && (y..y + b.size.height).contains(&p.y) {
-                return egui::Rect::from_min_size(
-                    egui::pos2(x as f32, y as f32),
-                    egui::vec2(b.size.width as f32, b.size.height as f32),
-                );
-            }
+        let screens: Vec<(f32, f32, f32, f32)> = ids
+            .into_iter()
+            .map(|id| CGDisplay::new(id).bounds())
+            .map(|b| (b.origin.x as f32, b.origin.y as f32, b.size.width as f32, b.size.height as f32))
+            .collect();
+        if let Some(r) = super::screen_at(p.x as f32, p.y as f32, &screens) {
+            return r;
         }
     }
     super::unix::pointer_screen(ctx)
