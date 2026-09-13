@@ -286,6 +286,86 @@ fn calendar_icon(p: &egui::Painter, c: egui::Pos2, color: Color32) {
 
 // ---------- storage: one JSON file, a daily backup ----------
 
+/// Priority tier. The list is grouped by it, the order inside a tier stays the rank.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Level {
+    High,
+    #[default]
+    Mid,
+    Low,
+}
+
+impl Level {
+    const ALL: [Level; 3] = [Level::High, Level::Mid, Level::Low];
+
+    fn rank(self) -> usize {
+        match self {
+            Level::High => 0,
+            Level::Mid => 1,
+            Level::Low => 2,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Level::High => "Haute",
+            Level::Mid => "Moyenne",
+            Level::Low => "Basse",
+        }
+    }
+}
+
+/// How much of a slot a task needs. Three closed steps, never empty: the question it
+/// answers is "I have twenty minutes, what fits".
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Effort {
+    Quick,
+    #[default]
+    Hours,
+    Day,
+}
+
+impl Effort {
+    const ALL: [Effort; 3] = [Effort::Quick, Effort::Hours, Effort::Day];
+
+    fn label(self) -> &'static str {
+        match self {
+            Effort::Quick => "30 min",
+            Effort::Hours => "2 h",
+            Effort::Day => "1 jour",
+        }
+    }
+
+    fn bars(self) -> usize {
+        match self {
+            Effort::Quick => 1,
+            Effort::Hours => 2,
+            Effort::Day => 3,
+        }
+    }
+}
+
+/// An unknown value in a hand-edited tasks.json falls back to the default instead of
+/// dropping the whole file (`load` turns any parse error into an empty store).
+fn lenient<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Or<T> {
+        Known(T),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Or::deserialize(d)? {
+        Or::Known(v) => v,
+        Or::Unknown(_) => T::default(),
+    })
+}
+
 #[derive(Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Task {
@@ -297,6 +377,10 @@ struct Task {
     notes: String,
     waiting: String, // "waiting on <who>"; empty = active
     tags: Vec<String>,
+    #[serde(deserialize_with = "lenient")]
+    level: Level,
+    #[serde(deserialize_with = "lenient")]
+    effort: Effort,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -416,9 +500,19 @@ fn urls(text: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Display order: active first, "waiting" at the bottom (stable sort).
-fn sort_waiting(items: &mut [Task]) {
-    items.sort_by_key(|t| !t.waiting.is_empty());
+/// Display order: by tier, "waiting" at the bottom (stable sort, so the rank inside a
+/// tier is the one the drag and drop left).
+fn sort_active(items: &mut [Task]) {
+    items.sort_by_key(|t| (!t.waiting.is_empty(), t.level.rank()));
+}
+
+/// Index just past the last task of that tier: where a task dropped at the end of the
+/// tier, or on an empty one, lands.
+fn level_end(items: &[Task], level: Level) -> usize {
+    items
+        .iter()
+        .position(|t| !t.waiting.is_empty() || t.level.rank() > level.rank())
+        .unwrap_or(items.len())
 }
 
 // ---------- app ----------
@@ -877,9 +971,11 @@ struct Add {
     notes_focused: bool,
     cal_view: Option<(i32, u32)>,
     names: Vec<String>, // requesters already entered, most frequent first
+    level: Level,
+    effort: Effort,
 }
 
-const ADD_SIZE: [f32; 2] = [560.0, 304.0];
+const ADD_SIZE: [f32; 2] = [560.0, 336.0];
 const CAL_HEIGHT: f32 = 330.0;
 
 /// People already entered (requesters and "waiting on"), most frequent first.
@@ -1038,11 +1134,10 @@ fn tag_color(tag: &str) -> Color32 {
     AVATARS[tag.to_lowercase().bytes().map(usize::from).sum::<usize>() % AVATARS.len()]
 }
 
-/// Small tag pill. True when clicked.
-fn tag_pill(ui: &mut egui::Ui, tag: &str, selected: bool) -> bool {
-    let c = tag_color(tag);
+/// Small pill, filled when selected. True when clicked.
+fn pill_button(ui: &mut egui::Ui, label: &str, c: Color32, selected: bool) -> bool {
     let fg = if selected { BG } else { c };
-    let g = ui.painter().layout_no_wrap(tag.to_string(), FontId::new(10.5, semibold()), fg);
+    let g = ui.painter().layout_no_wrap(label.to_string(), FontId::new(10.5, semibold()), fg);
     let (r, resp) = ui.allocate_exact_size(g.size() + vec2(12.0, 5.0), Sense::click());
     let fill = if selected {
         c
@@ -1052,6 +1147,57 @@ fn tag_pill(ui: &mut egui::Ui, tag: &str, selected: bool) -> bool {
     ui.painter().rect_filled(r, 6.0, fill);
     ui.painter().galley(r.center() - g.size() / 2.0, g, fg);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+}
+
+/// Small tag pill, coloured from the tag itself. True when clicked.
+fn tag_pill(ui: &mut egui::Ui, tag: &str, selected: bool) -> bool {
+    pill_button(ui, tag, tag_color(tag), selected)
+}
+
+/// Row of tier pills, the current one filled. Some when another is picked.
+fn level_chips(ui: &mut egui::Ui, current: Level) -> Option<Level> {
+    let mut pick = None;
+    for l in Level::ALL {
+        if pill_button(ui, l.label(), ACCENT, l == current) && l != current {
+            pick = Some(l);
+        }
+    }
+    pick
+}
+
+/// Row of effort pills, the current one filled. Some when another is picked.
+fn effort_chips(ui: &mut egui::Ui, current: Effort) -> Option<Effort> {
+    let mut pick = None;
+    for e in Effort::ALL {
+        if pill_button(ui, e.label(), MUTED, e == current) && e != current {
+            pick = Some(e);
+        }
+    }
+    pick
+}
+
+/// Efforts in use, with how often they appear. Empty when they are all the same: a filter
+/// on a single value filters nothing.
+fn efforts_all(items: &[Task]) -> Vec<(Effort, usize)> {
+    let v: Vec<(Effort, usize)> = Effort::ALL
+        .into_iter()
+        .map(|e| (e, items.iter().filter(|t| t.effort == e).count()))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    if v.len() < 2 { Vec::new() } else { v }
+}
+
+/// Effort: one, two or three bars of growing height, drawn in code.
+fn effort_bars(ui: &mut egui::Ui, e: Effort, color: Color32) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 26.0), Sense::hover());
+    let base = rect.center().y + 6.0;
+    for k in 0..3 {
+        let h = 5.0 + k as f32 * 3.5;
+        let x = rect.center().x - 6.5 + k as f32 * 4.5;
+        let bar = Rect::from_min_max(pos2(x, base - h), pos2(x + 3.0, base));
+        ui.painter().rect_filled(bar, 1.0, if k < e.bars() { color } else { DIM });
+    }
+    resp.on_hover_text(format!("effort : {}", e.label()));
 }
 
 /// Row of known tags, the ones present in `text` highlighted; a click toggles it in `text`.
@@ -1134,7 +1280,18 @@ impl Add {
                 r.request_focus();
                 self.focused = true;
             }
-            ui.add_space(2.0);
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if let Some(l) = level_chips(ui, self.level) {
+                    self.level = l;
+                }
+                ui.add_space(14.0);
+                if let Some(e) = effort_chips(ui, self.effort) {
+                    self.effort = e;
+                }
+            });
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 complete_field(ui, &mut self.from, "Demandé par", 190.0, &self.names, false);
                 let mut e = TextEdit::singleline(&mut self.deadline)
@@ -1239,6 +1396,8 @@ impl Add {
                 deadline: deadline.map(Date::iso).unwrap_or_default(),
                 notes: self.notes.trim().to_string(),
                 tags: parse_tags(&self.tags),
+                level: self.level,
+                effort: self.effort,
                 ..Default::default()
             });
             save(&store);
@@ -1254,6 +1413,7 @@ struct List {
     names: Vec<String>,
     tags_all: Vec<(String, usize)>,
     filter: Option<String>, // tag picked at the top of the list
+    effort: Option<Effort>, // effort picked at the top of the list
     show_done: bool,
     focused: bool,
     mtime: Option<std::time::SystemTime>, // tasks.json timestamp at the last load
@@ -1269,7 +1429,7 @@ struct List {
 impl List {
     fn new(quit: Option<Arc<std::sync::atomic::AtomicBool>>, hk_status: Option<Arc<std::sync::atomic::AtomicUsize>>) -> List {
         let mut store = load();
-        sort_waiting(&mut store.active);
+        sort_active(&mut store.active);
         let names = names(&store);
         let tags_all = tags_all(&store);
         List {
@@ -1277,6 +1437,7 @@ impl List {
             names,
             tags_all,
             filter: None,
+            effort: None,
             show_done: false,
             focused: false,
             mtime: std::fs::metadata(path(FILE)).and_then(|m| m.modified()).ok(),
@@ -1413,7 +1574,7 @@ impl List {
             // while a card is open, or its index would point at another task and the next
             // keystroke would land in it (every letter on a different ticket).
             if self.open.is_none() {
-                sort_waiting(&mut self.store.active);
+                sort_active(&mut self.store.active);
             }
             self.names = names(&self.store);
             self.tags_all = tags_all(&self.store);
@@ -1566,13 +1727,25 @@ impl List {
 
             // tag filter: a row of pills under the title, the active one filled
             let mut top = bar.bottom() + 4.0;
-            if !self.tags_all.is_empty() && !self.show_settings {
+            let efforts = efforts_all(if self.show_done { &self.store.done } else { &self.store.active });
+            if (!self.tags_all.is_empty() || !efforts.is_empty()) && !self.show_settings {
                 let row = Rect::from_min_max(
                     pos2(ui.max_rect().left() + 16.0, top),
                     pos2(ui.max_rect().right() - 16.0, top + 26.0),
                 );
                 let mut fui = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(Layout::left_to_right(Align::Center)));
                 fui.spacing_mut().item_spacing.x = 4.0;
+                let has_efforts = !efforts.is_empty();
+                for (e, n) in efforts {
+                    let on = self.effort == Some(e);
+                    if pill_button(&mut fui, &format!("{}  {n}", e.label()), MUTED, on) {
+                        self.effort = (!on).then_some(e);
+                        self.open = None;
+                    }
+                }
+                if has_efforts {
+                    fui.add_space(10.0);
+                }
                 for (tag, n) in self.tags_all.clone() {
                     let on = self.filter.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&tag));
                     if tag_pill(&mut fui, &format!("{tag}  {n}"), on) {
@@ -1594,6 +1767,43 @@ impl List {
         });
         egui::CentralPanel::default().frame(Frame::NONE).show(ctx, resize_grip);
     }
+}
+
+/// The tier a drop at `y` falls in: the last one whose header starts above it. `heads`
+/// holds the top of each tier header, `wait_top` the top of the waiting section, where
+/// nothing can be dropped.
+fn drop_level(heads: [f32; 3], wait_top: f32, y: f32) -> Option<Level> {
+    (y < wait_top).then(|| Level::ALL.into_iter().rev().find(|l| y >= heads[l.rank()]).unwrap_or(Level::High))
+}
+
+/// The slot a drop at `y` takes inside a tier: the first card of that tier whose middle is
+/// below the pointer, the end of the tier otherwise.
+fn drop_slot(items: &[Task], rows: &[(Rect, usize, Level)], level: Level, y: f32) -> usize {
+    rows.iter()
+        .find(|(r, _, l)| *l == level && y < r.center().y)
+        .map(|(_, i, _)| *i)
+        .unwrap_or_else(|| level_end(items, level))
+}
+
+/// Section header: a small caps label, its count, and a rule to the right edge.
+/// Returns the top of the block, which bounds the tier while dragging.
+fn section(ui: &mut egui::Ui, label: &str, n: usize, color: Color32) -> f32 {
+    let top = ui.cursor().top();
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(RichText::new(label.to_uppercase()).font(FontId::new(10.5, semibold())).color(color));
+        ui.label(
+            RichText::new(n.to_string())
+                .font(FontId::new(10.5, semibold()))
+                .color(DIM.lerp_to_gamma(MUTED, 0.6)),
+        );
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+        ui.painter()
+            .hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, DIM.lerp_to_gamma(MUTED, 0.6)));
+    });
+    ui.add_space(4.0);
+    top
 }
 
 fn empty_state(ui: &mut egui::Ui, msg: &str) {
@@ -1625,12 +1835,23 @@ impl List {
             empty_state(ui, &format!("Rien en attente.  {} pour ajouter.", self.settings.hotkey_add));
         }
         let mut out = Vec::new();
-        let mut rows = Vec::new();
+        let mut rows: Vec<(Rect, usize, Level)> = Vec::new();
+        let mut heads = [f32::INFINITY; 3]; // top of each tier header, the drop bands
+        let mut holes: [Option<Rect>; 3] = [None; 3]; // drop zone of an empty tier
+        let mut wait_top = f32::INFINITY;
+        let head_color = |l: Level| match l {
+            Level::High => TEXT,
+            Level::Mid => MUTED,
+            Level::Low => DIM.lerp_to_gamma(MUTED, 0.6),
+        };
         let open = self.open;
         let names = self.names.clone();
         let tags_all = self.tags_all.clone();
         let filter = self.filter.clone();
-        let keep = |t: &Task| filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f)));
+        let effort = self.effort;
+        let keep = |t: &Task| {
+            filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f))) && effort.is_none_or(|e| t.effort == e)
+        };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             // While dragging, a pointer near the top or bottom edge scrolls the list, or a
             // card could never travel past the edge of the screen.
@@ -1646,25 +1867,64 @@ impl List {
                     ui.ctx().request_repaint();
                 }
             }
-            let mut waiting_header = false;
-            for (i, t) in self.store.active.iter_mut().enumerate().filter(|(_, t)| keep(t)) {
-                if !t.waiting.is_empty() && !waiting_header {
-                    waiting_header = true;
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("EN ATTENTE").font(FontId::new(10.5, semibold())).color(MUTED));
-                        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                        ui.painter()
-                            .hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, DIM.lerp_to_gamma(MUTED, 0.6)));
-                    });
-                    ui.add_space(4.0);
+            // A tier with nothing in it shows up only while something is being dragged: it
+            // is then a drop target, and the only way to promote into an empty tier.
+            let dragging = egui::DragAndDrop::has_any_payload(ui.ctx());
+            let active = &mut self.store.active;
+            for lvl in Level::ALL {
+                let idx: Vec<usize> = (0..active.len())
+                    .filter(|&i| active[i].waiting.is_empty() && active[i].level == lvl && keep(&active[i]))
+                    .collect();
+                if idx.is_empty() && !dragging {
+                    continue;
                 }
-                let o = card(ui, i, Some(i + 1), t, today, open == Some((false, i)), &names, &tags_all);
-                rows.push(o.rect);
-                if o.action || o.toggle || o.changed {
-                    out.push((i, o));
+                heads[lvl.rank()] = section(ui, lvl.label(), idx.len(), head_color(lvl));
+                for &i in &idx {
+                    let o = card(
+                        ui,
+                        i,
+                        Some(i + 1),
+                        &mut active[i],
+                        today,
+                        open == Some((false, i)),
+                        &names,
+                        &tags_all,
+                    );
+                    rows.push((o.rect, i, lvl));
+                    if o.action || o.toggle || o.changed {
+                        out.push((i, o));
+                    }
+                    ui.add_space(8.0);
                 }
-                ui.add_space(8.0);
+                if idx.is_empty() {
+                    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+                    ui.painter()
+                        .rect_stroke(r.shrink(2.0), 8.0, Stroke::new(1.0_f32, DIM), StrokeKind::Inside);
+                    holes[lvl.rank()] = Some(r);
+                    ui.add_space(8.0);
+                }
+            }
+            let idx: Vec<usize> = (0..active.len())
+                .filter(|&i| !active[i].waiting.is_empty() && keep(&active[i]))
+                .collect();
+            if !idx.is_empty() {
+                wait_top = section(ui, "En attente", idx.len(), MUTED);
+                for &i in &idx {
+                    let o = card(
+                        ui,
+                        i,
+                        Some(i + 1),
+                        &mut active[i],
+                        today,
+                        open == Some((false, i)),
+                        &names,
+                        &tags_all,
+                    );
+                    if o.action || o.toggle || o.changed {
+                        out.push((i, o));
+                    }
+                    ui.add_space(8.0);
+                }
             }
         });
 
@@ -1672,26 +1932,37 @@ impl List {
         // the middle of each card.
         // ponytail: no reordering under a filter (the positions on show are not the real indices).
         let ctx = ui.ctx().clone();
-        if filter.is_some() {
+        if filter.is_some() || effort.is_some() {
             egui::DragAndDrop::clear_payload(&ctx);
         }
-        if let (Some(from), Some(pos)) = (egui::DragAndDrop::payload::<usize>(&ctx).map(|p| *p), ctx.pointer_interact_pos()) {
-            {
-                let to = rows.iter().position(|r| pos.y < r.center().y).unwrap_or(rows.len());
-                if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
-                    let y = rows.get(to).map(|r| r.top() - 4.0).unwrap_or(last.bottom() + 4.0);
-                    ui.painter().hline(first.x_range(), y, Stroke::new(2.0_f32, ACCENT));
-                    ui.painter().circle_filled(pos2(first.left(), y), 4.0, ACCENT);
+        if let (Some(from), Some(pos)) = (egui::DragAndDrop::payload::<usize>(&ctx).map(|p| *p), ctx.pointer_interact_pos())
+            && from < self.store.active.len()
+        {
+            // The tier under the pointer, then the slot inside that tier: the same drag
+            // reorders and changes the tier. Nothing is dropped on the waiting section.
+            if let Some(target) = drop_level(heads, wait_top, pos.y) {
+                let to = drop_slot(&self.store.active, &rows, target, pos.y);
+                let grp: Vec<(Rect, usize)> = rows.iter().filter(|(_, _, l)| *l == target).map(|(r, i, _)| (*r, *i)).collect();
+                let line = grp
+                    .iter()
+                    .find(|(_, i)| *i == to)
+                    .map(|(r, _)| (r.x_range(), r.top() - 4.0))
+                    .or_else(|| grp.last().map(|(r, _)| (r.x_range(), r.bottom() + 4.0)))
+                    .or_else(|| holes[target.rank()].map(|r| (r.x_range(), r.center().y)));
+                if let Some((x, y)) = line {
+                    ui.painter().hline(x, y, Stroke::new(2.0_f32, ACCENT));
+                    ui.painter().circle_filled(pos2(x.min, y), 4.0, ACCENT);
                 }
                 if ui.input(|i| i.pointer.any_released()) {
                     egui::DragAndDrop::clear_payload(&ctx);
+                    self.store.active[from].level = target;
                     reorder(&mut self.store.active, from, to);
-                    // ponytail: the active/waiting sort is applied again, so a drag that
-                    // crosses the boundary is silently undone.
-                    sort_waiting(&mut self.store.active);
+                    sort_active(&mut self.store.active);
                     self.open = None;
                     save(&self.store);
                 }
+            } else if ui.input(|i| i.pointer.any_released()) {
+                egui::DragAndDrop::clear_payload(&ctx);
             }
         }
 
@@ -1710,15 +1981,11 @@ impl List {
                 save(&self.store);
             }
         }
-        // A task moved to "waiting" (or back) changes section when the field loses focus.
-        if self.open.is_none()
-            && self
-                .store
-                .active
-                .windows(2)
-                .any(|w| !w[0].waiting.is_empty() && w[1].waiting.is_empty())
-        {
-            sort_waiting(&mut self.store.active);
+        // A task moved to "waiting" (or back), or given another tier, changes section once
+        // the card is folded again.
+        let key = |t: &Task| (!t.waiting.is_empty(), t.level.rank());
+        if self.open.is_none() && self.store.active.windows(2).any(|w| key(&w[0]) > key(&w[1])) {
+            sort_active(&mut self.store.active);
             save(&self.store);
         }
     }
@@ -1769,14 +2036,11 @@ impl List {
         let names = self.names.clone();
         let tags_all = self.tags_all.clone();
         let filter = self.filter.clone();
+        let effort = self.effort;
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for (i, t) in self
-                .store
-                .done
-                .iter_mut()
-                .enumerate()
-                .filter(|(_, t)| filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f))))
-            {
+            for (i, t) in self.store.done.iter_mut().enumerate().filter(|(_, t)| {
+                filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f))) && effort.is_none_or(|e| t.effort == e)
+            }) {
                 let o = card(ui, i, None, t, today, open == Some((true, i)), &names, &tags_all);
                 if o.action || o.toggle || o.changed {
                     out.push((i, o));
@@ -1795,7 +2059,7 @@ impl List {
                 let mut t = self.store.done.remove(i);
                 t.archived.clear();
                 self.store.active.push(t);
-                sort_waiting(&mut self.store.active);
+                sort_active(&mut self.store.active);
                 self.open = None;
                 save(&self.store);
             }
@@ -1860,7 +2124,7 @@ fn card(
         .as_ref()
         .map(|(s, _)| ui.painter().layout_no_wrap(s.clone(), FontId::proportional(12.0), MUTED).size().x + 18.0 + 8.0)
         .unwrap_or(0.0);
-    let right_w = 26.0 + 8.0 + 22.0 + 8.0 + pill_w; // round button, chevron, pill
+    let right_w = 26.0 + 8.0 + 22.0 + 8.0 + pill_w + 18.0 + 8.0; // round button, chevron, pill, effort
 
     // A click on the body of the card unfolds it. Registered BEFORE the content (with the
     // extent from the previous frame) so buttons and fields keep priority.
@@ -1953,6 +2217,7 @@ fn card(
                 if let Some((txt, col)) = &pill_txt {
                     pill(ui, txt, *col);
                 }
+                effort_bars(ui, t.effort, if dimmed { DIM.lerp_to_gamma(MUTED, 0.7) } else { MUTED });
             });
         });
 
@@ -2000,6 +2265,20 @@ fn card(
             }
             let mut wait = None;
             if archived.is_none() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("priorité").size(12.5).color(MUTED));
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    if let Some(l) = level_chips(ui, t.level) {
+                        t.level = l;
+                        out.changed = true;
+                    }
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("effort").size(12.5).color(MUTED));
+                    if let Some(e) = effort_chips(ui, t.effort) {
+                        t.effort = e;
+                        out.changed = true;
+                    }
+                });
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("⏳ en attente de").size(12.5).color(MUTED));
                     wait = Some(complete_field(ui, &mut t.waiting, "nom", 180.0, names, false));
@@ -2134,6 +2413,100 @@ mod tests {
     }
 
     #[test]
+    fn levels() {
+        let mk = |level: Level, waiting: &str, title: &str| Task {
+            level,
+            waiting: waiting.into(),
+            title: title.into(),
+            ..Default::default()
+        };
+        let mut v = vec![
+            mk(Level::Low, "", "c"),
+            mk(Level::High, "Alice", "w"),
+            mk(Level::Mid, "", "a"),
+            mk(Level::Mid, "", "b"),
+            mk(Level::High, "", "h"),
+        ];
+        sort_active(&mut v);
+        // by tier, waiting at the bottom whatever its tier, order kept inside a tier
+        assert_eq!(
+            v.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+            vec!["h", "a", "b", "c", "w"]
+        );
+        assert_eq!(level_end(&v, Level::High), 1);
+        assert_eq!(level_end(&v, Level::Mid), 3);
+        assert_eq!(level_end(&v, Level::Low), 4);
+        // dropped at the end of the high tier: the tier is set, then the sort keeps the slot
+        let from = 3;
+        v[from].level = Level::High;
+        let to = level_end(&v, Level::High);
+        reorder(&mut v, from, to);
+        sort_active(&mut v);
+        assert_eq!(
+            v.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+            vec!["h", "c", "a", "b", "w"]
+        );
+    }
+
+    #[test]
+    fn drop_geometry() {
+        // three tiers of one card each, headers at 0 / 100 / 200, waiting section at 300
+        let heads = [0.0, 100.0, 200.0];
+        let row = |top: f32, i: usize, l: Level| (Rect::from_min_max(pos2(0.0, top), pos2(10.0, top + 60.0)), i, l);
+        let rows = [row(30.0, 0, Level::High), row(130.0, 1, Level::Mid), row(230.0, 2, Level::Low)];
+        assert_eq!(drop_level(heads, 300.0, -20.0), Some(Level::High)); // above everything
+        assert_eq!(drop_level(heads, 300.0, 99.0), Some(Level::High));
+        assert_eq!(drop_level(heads, 300.0, 100.0), Some(Level::Mid)); // the header belongs to its tier
+        assert_eq!(drop_level(heads, 300.0, 299.0), Some(Level::Low));
+        assert_eq!(drop_level(heads, 300.0, 320.0), None); // over the waiting section
+
+        let mk = |level: Level| Task {
+            level,
+            ..Default::default()
+        };
+        let items = [mk(Level::High), mk(Level::Mid), mk(Level::Low)];
+        assert_eq!(drop_slot(&items, &rows, Level::High, 40.0), 0); // above the middle: takes its slot
+        assert_eq!(drop_slot(&items, &rows, Level::High, 90.0), 1); // below it: end of the tier
+        assert_eq!(drop_slot(&items, &rows, Level::Mid, 190.0), 2);
+        assert_eq!(drop_slot(&items, &rows, Level::Low, 290.0), 3);
+        // an empty tier has no card of its own: the drop lands at the tier boundary
+        let items = [mk(Level::High), mk(Level::Low)];
+        let rows = [row(30.0, 0, Level::High), row(230.0, 1, Level::Low)];
+        assert_eq!(drop_slot(&items, &rows, Level::Mid, 150.0), 1);
+    }
+
+    #[test]
+    fn efforts() {
+        let mk = |effort: Effort| Task {
+            effort,
+            ..Default::default()
+        };
+        // a single value in use filters nothing, so no pill at all
+        assert!(efforts_all(&[mk(Effort::Hours), mk(Effort::Hours)]).is_empty());
+        assert_eq!(
+            efforts_all(&[mk(Effort::Day), mk(Effort::Quick), mk(Effort::Day)]),
+            vec![(Effort::Quick, 1), (Effort::Day, 2)]
+        );
+        assert_eq!(serde_json::to_string(&Effort::Quick).unwrap(), r#""quick""#);
+        let s: Store = serde_json::from_str(r#"{"active":[{"title":"x","effort":"30min"},{"title":"y","effort":"day"}]}"#).unwrap();
+        assert_eq!(s.active[0].effort, Effort::Hours); // unknown value, the task survives
+        assert_eq!(s.active[0].title, "x");
+        assert_eq!(s.active[1].effort, Effort::Day);
+    }
+
+    #[test]
+    fn level_json() {
+        assert_eq!(serde_json::to_string(&Level::High).unwrap(), r#""high""#);
+        // a hand-edited file: an unknown tier falls back to the default, the task survives
+        let s: Store =
+            serde_json::from_str(r#"{"active":[{"title":"x","level":"haute"},{"title":"y","level":"low"},{"title":"z"}]}"#).unwrap();
+        assert_eq!(s.active[0].level, Level::Mid);
+        assert_eq!(s.active[0].title, "x");
+        assert_eq!(s.active[1].level, Level::Low);
+        assert_eq!(s.active[2].level, Level::Mid);
+    }
+
+    #[test]
     fn links_and_waiting() {
         assert_eq!(
             urls("voir https://docs.example.com/x et <http://a.b> fin"),
@@ -2144,7 +2517,7 @@ mod tests {
             ..Default::default()
         };
         let mut v = vec![mk("Alice"), mk(""), mk("Bob"), mk("")];
-        sort_waiting(&mut v);
+        sort_active(&mut v);
         assert_eq!(
             v.iter().map(|t| t.waiting.as_str()).collect::<Vec<_>>(),
             vec!["", "", "Alice", "Bob"]

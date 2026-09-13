@@ -24,12 +24,23 @@ makes the list honest about what is rotting.
 Shortcuts below are the Windows and Linux defaults; on macOS the same two are
 **Cmd+Alt+A** and **Cmd+Alt+P**. Both are yours to change.
 
-- **Ctrl+Alt+A**: capture a priority. Title, who asked, an optional deadline
+- **Ctrl+Alt+A**: capture a priority. Title, tier, effort, who asked, an optional deadline
   (typed, or picked in a calendar with *Tomorrow / Friday / +1 week / +1 month*),
   free tags and notes. Names and tags already used come back as clickable chips.
 - **Ctrl+Alt+P**: the list. Rank, title, requester avatar, deadline pill
   (red when overdue or due today, amber inside three days), tag pills. Drag the
   rank handle to reorder; the order is the priority.
+- **Three tiers**: *Haute*, *Moyenne*, *Basse*, a row of chips at capture time,
+  *Moyenne* by default. The list is cut in three and the rank keeps running
+  1..n across them, so a tier never hides which single task comes first.
+  Dragging a card across a separator moves it to that tier: the same gesture
+  ranks and promotes. An empty tier shows up as a drop target while a card is
+  held.
+- **Effort**: *30 min*, *2 h* or *1 jour*, on the same row of chips as the tier,
+  *2 h* by default and never empty. Three bars on the card say which one, and a
+  filter chip over the list answers the question that decides what you pick up:
+  I have twenty minutes, what fits. The chips appear once two different efforts
+  are in use, a filter on a single value filtering nothing.
 - **Aging**: a task with no deadline that has sat for 14 days greys out and says
   so, so it gets done, dated or archived instead of forgotten.
 - **Waiting on someone**: mark a task as waiting on a person and it sinks to a
