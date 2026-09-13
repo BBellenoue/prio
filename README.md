@@ -69,7 +69,13 @@ cmd /c mklink /J "$env:APPDATA\prio" "$env:OneDrive\prio"
 
 ## Install
 
-Requires Windows 10 or 11 and a [Rust](https://rustup.rs) toolchain.
+Requires Windows 10 or 11.
+
+Without a toolchain: download the zip from the latest
+[release](https://github.com/BBellenoue/prio/releases), unzip it anywhere
+permanent, and run `install-shortcuts.ps1` from that folder.
+
+From source, with a [Rust](https://rustup.rs) toolchain:
 
 ```powershell
 cargo build --release

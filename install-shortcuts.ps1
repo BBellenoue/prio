@@ -2,7 +2,9 @@
 #  - demarrage a l'ouverture de session (dossier Startup), sans argument => process resident,
 #    raccourcis globaux Ctrl+Alt+A (ajouter) et Ctrl+Alt+P (liste), icone de zone de notification ;
 #  - un raccourci "Prio" dans le menu Demarrer (reveille le resident, ou le lance s'il est absent).
-$exe = Join-Path $PSScriptRoot "target\release\prio.exe"
+# Depuis un zip de release, prio.exe est a cote du script; depuis le depot, dans target\release.
+$exe = Join-Path $PSScriptRoot "prio.exe"
+if (-not (Test-Path $exe)) { $exe = Join-Path $PSScriptRoot "target\release\prio.exe" }
 $menu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $startup = Join-Path $menu "Startup"
 $sh = New-Object -ComObject WScript.Shell
