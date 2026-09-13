@@ -23,6 +23,15 @@ A few things that are easy to miss:
   behind the same functions, no `cfg` scattered through the UI. A change that
   touches the shortcuts, the tray icon or the data folder has to land in
   `win.rs`, `mac.rs` and `linux.rs`, and CI builds all three.
+- **`cargo clippy` only ever compiles the backend of the machine you are on**,
+  so a change under `src/platform/` can break another one and still look
+  clean. Windows is reachable from any machine:
+  `rustup target add x86_64-pc-windows-msvc` then
+  `cargo clippy --target x86_64-pc-windows-msvc -- -D warnings` type checks
+  Windows with no linking and no Windows machine. Linux does not cross check
+  as cheaply, since its backend wants GTK and X11 headers for the target, so a
+  Linux box or a virtual machine stays the way. Runtime behaviour, a screen
+  scale or a system call, wants the real system either way.
 - **Linux means X11.** Global shortcuts rest on X11 key grabs; a Wayland
   session cannot give them to an ordinary application.
 - **No assets.** Fonts come from the system, the icons are drawn in code. Keep
