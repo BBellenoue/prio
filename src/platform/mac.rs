@@ -65,7 +65,7 @@ pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
             return r;
         }
     }
-    super::unix::pointer_screen(ctx)
+    super::origin_screen(ctx)
 }
 
 /// The matching global-hotkey shortcut.

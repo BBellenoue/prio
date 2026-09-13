@@ -62,8 +62,8 @@ pub fn today() -> (i32, u32, u32) {
 pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
     let ppp = ctx.pixels_per_point();
     match screen_at_pointer() {
-        Some(r) => egui::Rect::from_min_size(r.min / ppp, r.size() / ppp),
-        None => super::unix::pointer_screen(ctx),
+        Some(r) => r / ppp,
+        None => super::origin_screen(ctx),
     }
 }
 

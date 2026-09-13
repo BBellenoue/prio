@@ -30,48 +30,40 @@ pub fn today() -> (i32, u32, u32) {
     (st.wYear as i32, st.wMonth as u32, st.wDay as u32)
 }
 
-/// The screen holding the mouse pointer, in egui points, origin included. Win32 measures the
-/// pointer and the monitors in physical pixels from the top left of the primary monitor.
-/// winit converts a new viewport's logical position with the scale of the window at its
-/// creation, the primary monitor's, which is also this context's pixels_per_point: dividing
-/// by it lands the window on the right screen.
+/// The screen holding the mouse pointer, in egui points. Win32 counts both the pointer and
+/// the monitors in physical pixels from the top left of the primary monitor, the corner a
+/// viewport position also counts from and the scale winit applies to it (this context's
+/// pixels_per_point), so only the scale has to come out.
 // ponytail: with two screens at different scales the window is on the right screen but off
 // centre by half the size difference; GetDpiForMonitor (feature Win32_UI_HiDpi) on the target
 // monitor is the way up.
 pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
+    match monitor_at_pointer() {
+        Some(r) => r / ctx.pixels_per_point(),
+        None => super::origin_screen(ctx),
+    }
+}
+
+/// GetCursorPos, then the monitor holding it, in pixels.
+fn monitor_at_pointer() -> Option<egui::Rect> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint};
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-    let ppp = ctx.pixels_per_point();
-    let mut pt = POINT { x: 0, y: 0 };
-    let mut mi: MONITORINFO = unsafe { std::mem::zeroed() };
-    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-    let ok = unsafe {
-        GetCursorPos(&mut pt) != 0 && {
-            let mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-            !mon.is_null() && GetMonitorInfoW(mon, &mut mi) != 0
-        }
-    };
-    if ok {
-        let r = mi.rcMonitor;
-        return egui::Rect::from_min_max(
-            egui::pos2(r.left as f32 / ppp, r.top as f32 / ppp),
-            egui::pos2(r.right as f32 / ppp, r.bottom as f32 / ppp),
-        );
-    }
-    let (w, h) = screen_points(ctx);
-    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))
-}
-
-/// Size of the main screen, in egui points.
-fn screen_points(ctx: &egui::Context) -> (f32, f32) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-    let ppp = ctx.pixels_per_point();
     unsafe {
-        (
-            GetSystemMetrics(SM_CXSCREEN) as f32 / ppp,
-            GetSystemMetrics(SM_CYSCREEN) as f32 / ppp,
-        )
+        let mut pt = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut pt) == 0 {
+            return None;
+        }
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST), &mut mi) == 0 {
+            return None;
+        }
+        let r = mi.rcMonitor;
+        Some(egui::Rect::from_min_max(
+            egui::pos2(r.left as f32, r.top as f32),
+            egui::pos2(r.right as f32, r.bottom as f32),
+        ))
     }
 }
 

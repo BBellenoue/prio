@@ -1,8 +1,7 @@
-//! What the macOS and Linux backends share: the local date, the screen size, and the socket
+//! What the macOS and Linux backends share: the local date and the socket
 //! that carries a command to the resident.
 
 use crate::dbg_log;
-use eframe::egui;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -12,13 +11,6 @@ pub fn today() -> (i32, u32, u32) {
     let now = unsafe { libc::time(std::ptr::null_mut()) };
     unsafe { libc::localtime_r(&now, &mut tm) };
     (tm.tm_year + 1900, tm.tm_mon as u32 + 1, tm.tm_mday as u32)
-}
-
-/// The screen carrying the origin, in egui points: the fallback when the one under the
-/// pointer cannot be named.
-pub fn pointer_screen(ctx: &egui::Context) -> egui::Rect {
-    let size = ctx.input(|i| i.viewport().monitor_size);
-    egui::Rect::from_min_size(egui::Pos2::ZERO, size.unwrap_or(egui::vec2(1440.0, 900.0)))
 }
 
 /// Sends one command to the resident. false when no resident answers.
