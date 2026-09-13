@@ -10,8 +10,9 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue.svg" alt="Licence: MIT"></a>
 </p>
 
-A small Windows app for keeping one ordered list of priorities. Two global
-shortcuts, drag and drop to reorder, and nothing else in the way.
+A small desktop app, Windows, macOS and Linux, for keeping one ordered list of
+priorities. Two global shortcuts, drag and drop to reorder, and nothing else in
+the way.
 
 It exists because a pile of Notepad files is not a system: nothing dates
 anything, nothing ages, nothing tells you who is waiting on what, and you never
@@ -19,6 +20,9 @@ go back to them. Prio keeps the capture as cheap (one shortcut, type, Enter) and
 makes the list honest about what is rotting.
 
 ## Features
+
+Shortcuts below are the Windows and Linux defaults; on macOS the same two are
+**Cmd+Alt+A** and **Cmd+Alt+P**. Both are yours to change.
 
 - **Ctrl+Alt+A**: capture a priority. Title, who asked, an optional deadline
   (typed, or picked in a calendar with *Tomorrow / Friday / +1 week / +1 month*),
@@ -37,43 +41,56 @@ makes the list honest about what is rotting.
 - **Archive**: the check mark archives with the date; *Copy this week* puts a
   Markdown checklist of what you finished in the last seven days on the
   clipboard, for a weekly report. Anything can be restored.
-- **Resident**: one process at logon, a tray icon (left click opens the list,
-  right click for a menu), windows created on the shortcut and destroyed on
-  close. About 20 ms from the key press to the window.
+- **Resident**: one process at logon, an icon in the notification area or the
+  menu bar (left click opens the list, right click for a menu), windows created
+  on the shortcut and destroyed on close. About 20 ms from the key press to the
+  window.
 - **Your shortcuts**: the gear in the list's title bar opens the settings,
   where each shortcut is set by pressing the combination you want (Ctrl and/or
-  Alt, Shift if you like, then a letter, a digit, F1 to F24 or Space). Applied
+  Alt, Cmd too on macOS, Shift if you like, then a letter, a digit, F1 to F24
+  or Space). Applied
   at once; a combination another application already holds is flagged.
 
-Dark, frameless windows drawn with the system's Segoe UI; no assets shipped.
+Dark, frameless windows drawn with the system's own font, Segoe UI on Windows,
+San Francisco on macOS, Ubuntu or DejaVu on Linux; no assets shipped.
 
 ## Data
 
-Everything lives in `%APPDATA%\prio\`:
+Everything lives in `%APPDATA%\prio\` on Windows, in
+`~/Library/Application Support/prio/` on macOS, in `~/.local/share/prio/` on
+Linux:
 
 | File | Content |
 |---|---|
 | `tasks.json` | `{ "active": [...], "done": [...] }`, one object per task, readable and editable |
-| `backup\tasks.YYYY-MM-DD.json` | a copy taken before the first write of each day, 30 days kept |
-| `settings.json` | the two shortcuts, `Ctrl+Alt+A` and `Ctrl+Alt+P` by default |
-| `resident.tid` | the id of the resident's hotkey thread, so a second launch can wake it |
+| `backup/tasks.YYYY-MM-DD.json` | a copy taken before the first write of each day, 30 days kept |
+| `settings.json` | the two shortcuts, `Ctrl+Alt+A` and `Ctrl+Alt+P` by default, `Cmd+Alt+...` on macOS |
+| `resident.tid`, `prio.sock` | how a second launch reaches the resident: a thread id on Windows, a unix socket on macOS |
 
 Nothing leaves the machine. To sync between computers, point the folder at
-a synced location with a junction (both instances must not be open at once,
-the last write wins):
+a synced location with a link (both instances must not be open at once, the
+last write wins):
 
 ```powershell
 Move-Item "$env:APPDATA\prio" "$env:OneDrive\prio"
 cmd /c mklink /J "$env:APPDATA\prio" "$env:OneDrive\prio"
 ```
 
+```sh
+mv ~/Library/Application\ Support/prio ~/OneDrive/prio
+ln -s ~/OneDrive/prio ~/Library/Application\ Support/prio
+```
+
 ## Install
 
-Requires Windows 10 or 11.
+Requires Windows 10 or 11, macOS 11 and later, or a Linux desktop running an
+**X11 session**: under Wayland an application cannot reserve a key combination
+for itself, and the two global shortcuts are the whole point.
 
-Without a toolchain: download the zip from the latest
-[release](https://github.com/BBellenoue/prio/releases), unzip it anywhere
-permanent, and run `install-shortcuts.ps1` from that folder.
+Without a toolchain: download the archive for your system from the latest
+[release](https://github.com/BBellenoue/prio/releases), unpack it anywhere
+permanent, and run `install-shortcuts.ps1` or `install-macos.sh` from that
+folder.
 
 From source, with a [Rust](https://rustup.rs) toolchain:
 
@@ -83,46 +100,75 @@ cargo build --release
 ```
 
 The script puts a shortcut in the Startup folder (so Prio starts with your
-session, resident, no window), another in the Start menu, and launches it. To
-stop it: right click the tray icon, *Quitter*, or the *Quitter* link at the
+session, resident, no window), another in the Start menu, and launches it.
+
+```sh
+cargo build --release
+./install-macos.sh
+```
+
+The script wraps the binary in `~/Applications/Prio.app` (an `LSUIElement`
+bundle: menu bar, no Dock icon) and registers a session agent that starts it
+at login.
+
+```sh
+sudo apt install libgtk-3-dev libxdo-dev libayatana-appindicator3-dev libxkbcommon-x11-dev
+cargo build --release
+./install-linux.sh
+```
+
+The script puts the binary in `~/.local/bin`, a launcher in the applications
+menu and an autostart entry, then starts it.
+
+To stop it: right click the icon, *Quitter*, or the *Quitter* link at the
 bottom of the list.
 
-`prio.exe add` and `prio.exe list` open a single window and exit when it
-closes, for use from any other launcher.
+`prio add` and `prio list` open a single window and exit when it closes, for
+use from any other launcher.
 
 ## Layout
 
-One crate, one file. `src/main.rs` reads top to bottom:
+One crate. `src/main.rs` holds everything that does not depend on the system
+and reads top to bottom:
 
-- `Date`: calendar arithmetic on the standard library plus `GetLocalTime`,
+- `Date`: calendar arithmetic on the standard library plus the system clock,
   no date crate
 - `Task`, `Store`, `load`, `save`, `backup`: the JSON file and its daily copy
-- `main`, `Resident`, `hotkey_loop`: the resident process, `RegisterHotKey`,
-  the tray icon, one child viewport per window
+- `main`, `Resident`: the resident process and one child viewport per window
 - `Add`, `List`, `card`, `calendar`: the UI, built on
   [egui](https://github.com/emilk/egui) through eframe with the wgpu backend
 
+`src/platform/` holds the rest, one file per system behind the same functions:
+data folder, local date, system fonts, screen size, global shortcuts, icon and
+menu, and how a second launch reaches the resident. `mod.rs` parses a shortcut
+into a neutral combination that each backend then translates, `win.rs` into
+`RegisterHotKey` and a Win32 message loop, `mac.rs` into Carbon hotkeys and a
+menu bar item, `linux.rs` into X11 key grabs and a GTK tray thread. `unix.rs`
+carries what macOS and Linux share: the local date, the screen size, and the
+socket a second launch writes to.
+
 ## Development
 
-```powershell
+```sh
 cargo fmt --check
 cargo clippy -- -D warnings
 cargo test
 ```
 
-CI runs those on Windows. A second workflow runs Semgrep, Trivy, cargo-deny
-and Gitleaks on every push and every Monday, with findings in the repository's
+CI runs those on Windows, macOS and Linux. A second workflow runs Semgrep, Trivy,
+cargo-deny and Gitleaks on every push and every Monday, with findings in the repository's
 Security tab; `cargo deny check` runs the same advisory and licence checks
 locally.
 
-`PRIO_DEBUG=1` writes a trace to `%APPDATA%\prio\debug.log`.
+`PRIO_DEBUG=1` writes a trace to `debug.log`, next to `tasks.json`.
 `PRIO_TEST_HOTKEY=1` (add) or `2` (list) fires a shortcut at startup, for
 testing without a keyboard; `PRIO_TEST_SETTINGS=1` opens the list on its
-settings panel. `prio.exe add cal` opens the capture window with the calendar
+settings panel. `prio add cal` opens the capture window with the calendar
 unfolded.
 
-The logo lives in `docs/logo.svg`; the tray and window icons are the same
-drawing, rasterised in code (`logo_rgba`). `docs/social-preview.png` is the
+The logo lives in `docs/logo.svg`; the notification area, menu bar and window
+icons are the same drawing, rasterised in code (`logo_rgba`), as a template
+image on macOS so it follows the system appearance. `docs/social-preview.png` is the
 1280x640 card for the repository's social preview.
 
 ## Licence

@@ -1,9 +1,12 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+mod platform;
 
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, FontFamily, FontId, Frame, Id, Layout, Rect, RichText, Sense, Stroke, StrokeKind, TextEdit,
     ViewportCommand, pos2, vec2,
 };
+use platform::{HK_ADD, HK_ADD_FAILED, HK_LIST, HK_LIST_FAILED, HK_QUIT};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,7 +34,7 @@ const AVATARS: [Color32; 6] = [
 const RADIUS: f32 = 12.0;
 const STALE_DAYS: i64 = 14;
 
-/// Texte d'aide des champs: plus pale que la saisie (override_text_color imposerait sinon la meme couleur).
+/// Field hint text: paler than the input (override_text_color would otherwise force the same colour).
 fn hint(s: &str) -> RichText {
     RichText::new(s).color(DIM.lerp_to_gamma(MUTED, 0.55))
 }
@@ -40,20 +43,18 @@ fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())
 }
 
-// ---------- dates (stdlib + GetLocalTime, pas de crate calendrier) ----------
+// ---------- dates (stdlib plus the system clock, no calendar crate) ----------
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Date(i32, u32, u32);
 
 impl Date {
     fn today() -> Date {
-        use windows_sys::Win32::{Foundation::SYSTEMTIME, System::SystemInformation::GetLocalTime};
-        let mut st: SYSTEMTIME = unsafe { std::mem::zeroed() };
-        unsafe { GetLocalTime(&mut st) };
-        Date(st.wYear as i32, st.wMonth as u32, st.wDay as u32)
+        let (y, m, d) = platform::today();
+        Date(y, m, d)
     }
 
-    /// Jours depuis 1970-01-01 (algorithme de Howard Hinnant).
+    /// Days since 1970-01-01 (Howard Hinnant's algorithm).
     fn days(self) -> i64 {
         let Date(y, m, d) = self;
         let y = (if m <= 2 { y - 1 } else { y }) as i64;
@@ -64,7 +65,7 @@ impl Date {
         era * 146097 + doe - 719468
     }
 
-    /// Accepte AAAA-MM-JJ, JJ/MM/AAAA, JJ/MM/AA, JJ/MM (annee courante).
+    /// Accepts YYYY-MM-DD, DD/MM/YYYY, DD/MM/YY, DD/MM (current year).
     fn parse(s: &str, today: Date) -> Option<Date> {
         let p: Option<Vec<u32>> = s.split(['/', '-', '.']).map(|x| x.trim().parse().ok()).collect();
         let (y, m, d) = match p?[..] {
@@ -85,7 +86,7 @@ impl Date {
     }
 
     fn from_days(days: i64) -> Date {
-        // Inverse de days() (Hinnant, civil_from_days).
+        // Inverse of days() (Hinnant, civil_from_days).
         let z = days + 719468;
         let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
         let doe = z - era * 146097;
@@ -98,7 +99,7 @@ impl Date {
         Date(y, m, d)
     }
 
-    /// 0 = lundi ... 6 = dimanche.
+    /// 0 = Monday ... 6 = Sunday.
     fn weekday(self) -> u32 {
         ((self.days() + 3).rem_euclid(7)) as u32
     }
@@ -125,7 +126,7 @@ const MONTHS: [&str; 12] = [
 
 const CELL: f32 = 36.0;
 
-/// Bouton rond discret (fleches du calendrier).
+/// Quiet round button (the calendar arrows).
 fn nav_button(ui: &mut egui::Ui, glyph: &str) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
     if resp.hovered() {
@@ -141,7 +142,7 @@ fn nav_button(ui: &mut egui::Ui, glyph: &str) -> bool {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
-/// Chip borde (raccourcis de date).
+/// Outlined chip (the date shortcuts).
 fn chip(ui: &mut egui::Ui, label: &str) -> bool {
     let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), TEXT);
     let (r, resp) = ui.allocate_exact_size(g.size() + vec2(20.0, 10.0), Sense::click());
@@ -157,7 +158,7 @@ fn chip(ui: &mut egui::Ui, label: &str) -> bool {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
-/// Mini calendrier: un mois, clic sur un jour. `view` = (annee, mois) affiche.
+/// Small calendar: one month, click a day. `view` = the (year, month) on show.
 fn calendar(ui: &mut egui::Ui, view: &mut (i32, u32), selected: Option<Date>, today: Date) -> Option<Date> {
     let mut picked = None;
     let width = 7.0 * CELL;
@@ -264,7 +265,7 @@ fn calendar(ui: &mut egui::Ui, view: &mut (i32, u32), selected: Option<Date>, to
     picked
 }
 
-/// Icone calendrier peinte (pas d'emoji).
+/// Calendar icon, painted (no emoji).
 fn calendar_icon(p: &egui::Painter, c: egui::Pos2, color: Color32) {
     let r = Rect::from_center_size(c, vec2(14.0, 13.0));
     p.rect_stroke(r, 2.5, Stroke::new(1.4_f32, color), StrokeKind::Inside);
@@ -283,7 +284,7 @@ fn calendar_icon(p: &egui::Painter, c: egui::Pos2, color: Color32) {
     }
 }
 
-// ---------- stockage: un JSON, backup quotidien ----------
+// ---------- storage: one JSON file, a daily backup ----------
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -294,7 +295,7 @@ struct Task {
     deadline: String,
     archived: String,
     notes: String,
-    waiting: String, // "en attente de <qui>" ; vide = actif
+    waiting: String, // "waiting on <who>"; empty = active
     tags: Vec<String>,
 }
 
@@ -313,14 +314,14 @@ const SETTINGS_FILE: &str = "settings.json";
 struct Settings {
     hotkey_add: String,
     hotkey_list: String,
-    toggle_close: bool, // le raccourci referme la fenetre si elle est deja ouverte
+    toggle_close: bool, // the shortcut closes the window again when it is already open
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            hotkey_add: "Ctrl+Alt+A".into(),
-            hotkey_list: "Ctrl+Alt+P".into(),
+            hotkey_add: platform::DEFAULT_HOTKEY_ADD.into(),
+            hotkey_list: platform::DEFAULT_HOTKEY_LIST.into(),
             toggle_close: true,
         }
     }
@@ -339,79 +340,8 @@ fn save_settings(s: &Settings) {
     }
 }
 
-/// "Ctrl+Alt+A" -> (modificateurs RegisterHotKey, code de touche virtuelle). Au moins Ctrl ou Alt,
-/// puis une lettre, un chiffre, F1 a F24 ou Espace.
-fn parse_hotkey(spec: &str) -> Option<(u32, u32)> {
-    let parts: Vec<&str> = spec.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
-    let (key, mods) = parts.split_last()?;
-    let mut m = 0u32;
-    for md in mods {
-        m |= match md.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => 0x0002,
-            "alt" => 0x0001,
-            "shift" | "maj" => 0x0004,
-            "win" | "super" => 0x0008,
-            _ => return None,
-        };
-    }
-    if m & 0x0003 == 0 {
-        return None; // Shift ou Win seuls: trop facile a declencher par accident
-    }
-    let k = key.to_ascii_uppercase();
-    let vk = match k.as_str() {
-        "SPACE" | "ESPACE" => 0x20,
-        k if k.len() == 1 && k.as_bytes()[0].is_ascii_alphanumeric() => k.as_bytes()[0] as u32,
-        k if k.starts_with('F') => {
-            let n: u32 = k[1..].parse().ok()?;
-            (1..=24).contains(&n).then(|| 0x6F + n)?
-        }
-        _ => return None,
-    };
-    Some((m, vk))
-}
-
-/// Libelle "Ctrl+Alt+A" a partir d'une touche egui et de ses modificateurs, si la combinaison est valable.
-fn hotkey_label(key: egui::Key, mods: egui::Modifiers) -> Option<String> {
-    let mut parts = Vec::new();
-    if mods.ctrl {
-        parts.push("Ctrl");
-    }
-    if mods.alt {
-        parts.push("Alt");
-    }
-    if mods.shift {
-        parts.push("Shift");
-    }
-    let name = key.name().to_string();
-    parts.push(&name);
-    let label = parts.join("+");
-    parse_hotkey(&label).map(|_| label)
-}
-
-/// Poste un message au thread des raccourcis du resident (le notre ou celui d'un autre process).
-fn post_hotkey_thread(msg: u32) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
-    if let Some(tid) = std::fs::read_to_string(path(TID_FILE))
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-    {
-        unsafe { PostThreadMessageW(tid, msg, 0, 0) };
-    }
-}
-
-/// Demande au resident de relire settings.json et de re-enregistrer ses raccourcis.
-fn notify_hotkeys_changed() {
-    post_hotkey_thread(WM_RELOAD_HOTKEYS);
-}
-
-/// Suspend les raccourcis globaux le temps d'une saisie: sinon Windows intercepte la
-/// combinaison en cours (ex. Ctrl+Alt+A) et ouvre la fenetre au lieu de la laisser au panneau.
-fn suspend_hotkeys() {
-    post_hotkey_thread(WM_SUSPEND_HOTKEYS);
-}
-
 fn path(name: &str) -> PathBuf {
-    let dir = PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("prio");
+    let dir = platform::data_dir();
     let _ = std::fs::create_dir_all(&dir);
     dir.join(name)
 }
@@ -420,7 +350,7 @@ fn load() -> Store {
     if let Ok(s) = std::fs::read_to_string(path(FILE)) {
         return serde_json::from_str(&s).unwrap_or_default();
     }
-    // Migration depuis l'ancien format TSV (archived\tadded\tdeadline\tfrom\ttitle).
+    // Migration from the old TSV format (archived\tadded\tdeadline\tfrom\ttitle).
     let tsv = |name: &str| -> Vec<Task> {
         std::fs::read_to_string(path(name))
             .unwrap_or_default()
@@ -450,8 +380,8 @@ fn load() -> Store {
     store
 }
 
-/// Sauvegarde quotidienne: avant la premiere ecriture du jour, copie l'etat
-/// precedent dans backup/tasks.<AAAA-MM-JJ>.json. Garde les 30 derniers.
+/// Daily backup: before the first write of the day, copy the previous state to
+/// backup/tasks.<YYYY-MM-DD>.json. The last 30 are kept.
 fn backup() {
     let src = path(FILE);
     if !src.exists() {
@@ -467,7 +397,7 @@ fn backup() {
     let mut old: Vec<PathBuf> = std::fs::read_dir(&dir)
         .map(|rd| rd.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
-    old.sort(); // noms ISO => ordre chronologique
+    old.sort(); // ISO names, so sorting is chronological
     for p in old.iter().rev().skip(30) {
         let _ = std::fs::remove_file(p);
     }
@@ -486,7 +416,7 @@ fn urls(text: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Ordre d'affichage: actives d'abord, "en attente" en bas (tri stable).
+/// Display order: active first, "waiting" at the bottom (stable sort).
 fn sort_waiting(items: &mut [Task]) {
     items.sort_by_key(|t| !t.waiting.is_empty());
 }
@@ -494,10 +424,11 @@ fn sort_waiting(items: &mut [Task]) {
 // ---------- app ----------
 
 fn main() -> eframe::Result {
-    // Sans argument: process resident. La fenetre racine est un pixel transparent, traversant,
-    // qui ne sert qu'a recevoir les raccourcis globaux ; liste et ajout sont des viewports enfants
-    // crees a la demande et detruits a la fermeture (une fenetre cachee ne recoit plus de rendu).
-    // `add` / `list`: fenetre unique, one-shot (raccourci classique, script).
+    // No argument: the resident process. The root window is one transparent pixel, click
+    // through, whose only job is to receive the global shortcuts; the list and the capture
+    // window are child viewports created on demand and destroyed on close (a hidden window
+    // is no longer rendered). `add` / `list`: a single one-shot window, for a plain shortcut
+    // or a script.
     let arg = std::env::args().nth(1).unwrap_or_default();
     let cal = std::env::args().nth(2).as_deref() == Some("cal");
     let (title, size) = match arg.as_str() {
@@ -507,21 +438,16 @@ fn main() -> eframe::Result {
     };
     let resident = arg.is_empty();
 
-    // Instance unique: les raccourcis sont pris AVANT de creer la moindre fenetre. S'ils sont
-    // deja pris, un resident tourne: on lui demande d'afficher la liste et on s'arrete la.
+    // Single instance: the resident's place is taken BEFORE any window exists. If it is
+    // already taken, a resident is running: ask it to show the list and stop there.
     let hotkey: Arc<std::sync::atomic::AtomicUsize> = Default::default();
     let hk_status: Arc<std::sync::atomic::AtomicUsize> = Default::default();
     let ctx_cell: Arc<std::sync::OnceLock<egui::Context>> = Default::default();
-    if resident {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (cell, flag, st) = (ctx_cell.clone(), hotkey.clone(), hk_status.clone());
-        std::thread::spawn(move || hotkey_loop(tx, cell, flag, st));
-        if !rx.recv().unwrap_or(false) {
-            if wake_resident() {
-                return Ok(());
-            }
-            return main_with("Prio", LIST_SIZE, false, hotkey, hk_status, ctx_cell);
+    if resident && !platform::start_resident(ctx_cell.clone(), hotkey.clone(), hk_status.clone()) {
+        if platform::wake_resident() {
+            return Ok(());
         }
+        return main_with("Prio", LIST_SIZE, false, hotkey, hk_status, ctx_cell);
     }
     main_with(title, size, resident, hotkey, hk_status, ctx_cell)
 }
@@ -541,25 +467,28 @@ fn main_with(
             .with_taskbar(false)
             .with_mouse_passthrough(true);
     }
-    // wgpu (DX12) plutot que glow: le pilote OpenGL Intel plante (0xC0000005) a la fermeture d'un viewport enfant.
-    let opts = eframe::NativeOptions {
+    // wgpu rather than glow: on Windows the Intel OpenGL driver crashes (0xC0000005) when a
+    // child viewport is closed.
+    let mut opts = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    platform::configure(&mut opts);
     eframe::run_native(
         "prio",
         opts,
         Box::new(move |cc| {
             style(&cc.egui_ctx);
             let _ = ctx_cell.set(cc.egui_ctx.clone());
-            dbg_log(&format!("app cree: {title}"));
+            let cell = ctx_cell.clone();
+            dbg_log(&format!("app created: {title}"));
             Ok(match title {
                 "Nouvelle priorité" => Box::new(Add::new()) as Box<dyn eframe::App>,
                 "Prio" => Box::new(List::new(None, None)),
                 _ => {
-                    let r = Resident::new(hotkey, hk_status);
-                    // test sans clavier: PRIO_TEST_HOTKEY=1|2 simule Ctrl+Alt+A / Ctrl+Alt+P au demarrage
+                    let r = Resident::new(cell, hotkey, hk_status);
+                    // testing without a keyboard: PRIO_TEST_HOTKEY=1|2 fires either shortcut at startup
                     if let Some(n) = std::env::var("PRIO_TEST_HOTKEY").ok().and_then(|v| v.parse().ok()) {
                         r.hotkey.store(n, std::sync::atomic::Ordering::SeqCst);
                     }
@@ -570,7 +499,7 @@ fn main_with(
     )
 }
 
-/// Fenetre sans decoration, transparente (coins arrondis peints), toujours au-dessus.
+/// Undecorated window, transparent (the rounded corners are painted), always on top.
 fn window_builder(title: &str, size: [f32; 2]) -> egui::ViewportBuilder {
     egui::ViewportBuilder::default()
         .with_title(title)
@@ -586,7 +515,7 @@ fn window_builder(title: &str, size: [f32; 2]) -> egui::ViewportBuilder {
         }))
 }
 
-/// Trace de debug (variable PRIO_DEBUG=1) dans %APPDATA%\priority\debug.log.
+/// Debug trace (PRIO_DEBUG=1) in debug.log, next to tasks.json.
 fn dbg_log(msg: &str) {
     if std::env::var_os("PRIO_DEBUG").is_none() {
         return;
@@ -597,69 +526,20 @@ fn dbg_log(msg: &str) {
     }
 }
 
-/// Taille physique de l'ecran principal.
-fn screen_px() -> (f32, f32) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-    unsafe { (GetSystemMetrics(SM_CXSCREEN) as f32, GetSystemMetrics(SM_CYSCREEN) as f32) }
-}
-
-/// Position (en points egui) pour centrer une fenetre de `size` points, un peu au-dessus du milieu.
-fn centered(size: [f32; 2], ppp: f32) -> egui::Pos2 {
-    let (w, h) = screen_px();
-    pos2((w / ppp - size[0]) / 2.0, (h / ppp - size[1]) / 3.0)
+/// Position (in egui points) centring a window of `size` points, a little above the middle.
+fn centered(ctx: &egui::Context, size: [f32; 2]) -> egui::Pos2 {
+    let (w, h) = platform::screen_points(ctx);
+    pos2((w - size[0]) / 2.0, (h - size[1]) / 3.0)
 }
 
 const LIST_SIZE: [f32; 2] = [520.0, 640.0];
-const HK_ADD: usize = 1;
-const HK_LIST: usize = 2;
-const TID_FILE: &str = "resident.tid";
-
-/// Demande au resident existant d'afficher la liste: message poste a son thread de raccourcis,
-/// dont l'id est publie dans %APPDATA%\priority\resident.tid. false si aucun resident joignable.
-fn wake_resident() -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_HOTKEY};
-    let Some(tid) = std::fs::read_to_string(path(TID_FILE))
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-    else {
-        return false;
-    };
-    unsafe { PostThreadMessageW(tid, WM_HOTKEY, HK_LIST, 0) != 0 }
-}
-
-const HK_QUIT: usize = 3;
-const WM_RELOAD_HOTKEYS: u32 = 0x8001; // WM_APP + 1, poste au thread des raccourcis
-const WM_SUSPEND_HOTKEYS: u32 = 0x8002; // WM_APP + 2: desenregistre le temps d'une saisie
-const HK_ADD_FAILED: usize = 1; // bits de hk_status
-const HK_LIST_FAILED: usize = 2;
-
-/// (Re)enregistre les deux raccourcis d'apres settings.json. Renvoie false si AUCUN n'a pu l'etre
-/// (typiquement: un autre resident tourne). Les echecs individuels sont publies dans `status`.
-fn register_hotkeys(status: &std::sync::atomic::AtomicUsize) -> bool {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey};
-    let s = load_settings();
-    let mut bits = 0;
-    for (id, spec, bit) in [(HK_ADD, &s.hotkey_add, HK_ADD_FAILED), (HK_LIST, &s.hotkey_list, HK_LIST_FAILED)] {
-        unsafe { UnregisterHotKey(std::ptr::null_mut(), id as i32) };
-        let ok = parse_hotkey(spec)
-            .map(|(m, vk)| unsafe { RegisterHotKey(std::ptr::null_mut(), id as i32, m | MOD_NOREPEAT, vk) != 0 })
-            .unwrap_or(false);
-        if !ok {
-            bits |= bit;
-        }
-    }
-    status.store(bits, std::sync::atomic::Ordering::SeqCst);
-    dbg_log(&format!("register_hotkeys {:?}/{:?} -> echecs={bits}", s.hotkey_add, s.hotkey_list));
-    bits != HK_ADD_FAILED | HK_LIST_FAILED
-}
-
-/// Logo dessine (pas d'asset): tuile bleue arrondie, trois barres de priorite decroissantes.
-/// Memes proportions que docs/logo.svg (grille 128). Sert a l'icone de zone de notification
-/// (32 px) et a l'icone des fenetres (64 px).
+/// The logo, drawn (no asset): a rounded blue tile, three decreasing priority bars. Same
+/// proportions as docs/logo.svg (a 128 grid). Used for the notification area or menu bar
+/// icon (32 px) and for the window icon (64 px).
 fn logo_rgba(size: usize) -> Vec<u8> {
     let k = size as f32 / 128.0;
     let mut px = vec![0u8; size * size * 4];
-    // (x, y, largeur, hauteur, rayon) dans la grille 128
+    // (x, y, width, height, radius) in the 128 grid
     let tile = (8.0, 8.0, 112.0, 112.0, 28.0);
     let bars = [
         (32.0, 36.0, 64.0, 14.0, 7.0),
@@ -689,122 +569,28 @@ fn logo_rgba(size: usize) -> Vec<u8> {
     px
 }
 
-/// Thread dedie: RegisterHotKey lie les raccourcis au thread appelant, et winit
-/// n'expose pas WM_HOTKEY. Heberge aussi l'icone de zone de notification (meme boucle
-/// de messages). Reveille l'UI via request_repaint quand un evenement tombe.
-fn hotkey_loop(
-    tx: std::sync::mpsc::Sender<bool>,
-    ctx: Arc<std::sync::OnceLock<egui::Context>>,
-    flag: Arc<std::sync::atomic::AtomicUsize>,
-    status: Arc<std::sync::atomic::AtomicUsize>,
-) {
-    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-    use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage, WM_HOTKEY};
-    let ok = register_hotkeys(&status);
-    let _ = tx.send(ok);
-    if !ok {
-        return;
-    }
-    let _ = std::fs::write(path(TID_FILE), unsafe { GetCurrentThreadId() }.to_string());
-
-    let settings = load_settings();
-    let menu = Menu::new();
-    let m_list = MenuItem::new(format!("Prio\t{}", settings.hotkey_list), true, None);
-    let m_add = MenuItem::new(format!("Ajouter\t{}", settings.hotkey_add), true, None);
-    let m_quit = MenuItem::new("Quitter", true, None);
-    let _ = menu.append_items(&[&m_list, &m_add, &PredefinedMenuItem::separator(), &m_quit]);
-    let icon = tray_icon::Icon::from_rgba(logo_rgba(32), 32, 32).ok();
-    let mut builder = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_tooltip(format!("Prio  ·  {}", settings.hotkey_list))
-        .with_menu_on_left_click(false);
-    if let Some(i) = icon {
-        builder = builder.with_icon(i);
-    }
-    let tray = builder.build(); // garde l'icone vivante jusqu'a la fin du thread
-
-    let fire = |n: usize| {
-        flag.store(n, std::sync::atomic::Ordering::SeqCst);
-        if let Some(c) = ctx.get() {
-            c.request_repaint();
-        }
-    };
-    let mut msg: MSG = unsafe { std::mem::zeroed() };
-    loop {
-        let r = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
-        if r <= 0 {
-            dbg_log(&format!("hotkey_loop: GetMessageW={r} -> fin du thread"));
-            break;
-        }
-        if msg.message == WM_HOTKEY {
-            dbg_log(&format!("WM_HOTKEY {}", msg.wParam));
-            fire(msg.wParam);
-        }
-        if msg.message == WM_SUSPEND_HOTKEYS {
-            use windows_sys::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey;
-            unsafe {
-                UnregisterHotKey(std::ptr::null_mut(), HK_ADD as i32);
-                UnregisterHotKey(std::ptr::null_mut(), HK_LIST as i32);
-            }
-            dbg_log("raccourcis suspendus (saisie en cours)");
-        }
-        if msg.message == WM_RELOAD_HOTKEYS {
-            register_hotkeys(&status);
-            let s = load_settings();
-            m_list.set_text(format!("Prio\t{}", s.hotkey_list));
-            m_add.set_text(format!("Ajouter\t{}", s.hotkey_add));
-            if let Ok(t) = &tray {
-                let _ = t.set_tooltip(Some(format!("Prio  ·  {}", s.hotkey_list)));
-            }
-            fire(0); // rafraichit le panneau Reglages (etat des raccourcis)
-        }
-        unsafe {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-        while let Ok(e) = MenuEvent::receiver().try_recv() {
-            let id = e.id();
-            fire(if *id == *m_list.id() {
-                HK_LIST
-            } else if *id == *m_add.id() {
-                HK_ADD
-            } else if *id == *m_quit.id() {
-                HK_QUIT
-            } else {
-                0
-            });
-        }
-        while let Ok(e) = TrayIconEvent::receiver().try_recv() {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = e
-            {
-                fire(HK_LIST);
-            }
-        }
-    }
-}
-
-// ---------- resident: pixel racine + viewports enfants ----------
+// ---------- resident: the root pixel and its child viewports ----------
 
 struct Resident {
+    rt: platform::Runtime,
     hotkey: Arc<std::sync::atomic::AtomicUsize>,
     list: Arc<std::sync::Mutex<List>>,
     list_open: Arc<std::sync::atomic::AtomicBool>,
-    list_pos: Arc<std::sync::Mutex<Option<egui::Pos2>>>, // derniere position, restauree a la reouverture
+    list_pos: Arc<std::sync::Mutex<Option<egui::Pos2>>>, // last position, restored when it reopens
     add: Arc<std::sync::Mutex<Add>>,
     add_open: Arc<std::sync::atomic::AtomicBool>,
     quit: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Resident {
-    fn new(hotkey: Arc<std::sync::atomic::AtomicUsize>, hk_status: Arc<std::sync::atomic::AtomicUsize>) -> Resident {
+    fn new(
+        ctx: Arc<std::sync::OnceLock<egui::Context>>,
+        hotkey: Arc<std::sync::atomic::AtomicUsize>,
+        hk_status: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Resident {
         let quit: Arc<std::sync::atomic::AtomicBool> = Default::default();
         Resident {
+            rt: platform::Runtime::start(ctx, hotkey.clone(), hk_status.clone()),
             hotkey,
             list: Arc::new(std::sync::Mutex::new(List::new(Some(quit.clone()), Some(hk_status)))),
             list_open: Default::default(),
@@ -823,6 +609,7 @@ impl eframe::App for Resident {
 
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         use std::sync::atomic::Ordering::SeqCst;
+        self.rt.tick();
         let hk = self.hotkey.swap(0, SeqCst);
         if self.quit.load(SeqCst) || hk == HK_QUIT {
             std::process::exit(0);
@@ -837,7 +624,7 @@ impl eframe::App for Resident {
         match hk {
             HK_LIST => {
                 if self.list_open.load(SeqCst) {
-                    // deja ouverte: le raccourci la referme (reglage) ou la ramene devant
+                    // already open: the shortcut closes it (a setting) or brings it to the front
                     let cmd = if load_settings().toggle_close {
                         ViewportCommand::Close
                     } else {
@@ -849,7 +636,7 @@ impl eframe::App for Resident {
                 }
             }
             HK_ADD => {
-                // une seule fenetre d'ajout a la fois: deja ouverte => on la referme (reglage) ou on la ramene devant
+                // one capture window at a time: already open, so close it (a setting) or bring it to the front
                 if self.add_open.load(SeqCst) {
                     let cmd = if load_settings().toggle_close {
                         ViewportCommand::Close
@@ -864,14 +651,15 @@ impl eframe::App for Resident {
             }
             _ => {}
         }
-        // La racine (1 px, traversante) n'a rien a dessiner.
+        // The root (1 px, click through) has nothing to draw.
         egui::CentralPanel::default().frame(Frame::NONE).show(ctx, |_| {});
 
         if self.list_open.load(SeqCst) {
             let (list, open, pos) = (self.list.clone(), self.list_open.clone(), self.list_pos.clone());
-            let at = pos.lock().unwrap().unwrap_or_else(|| centered(LIST_SIZE, ctx.pixels_per_point()));
+            let at = pos.lock().unwrap().unwrap_or_else(|| centered(ctx, LIST_SIZE));
             let builder = window_builder("Prio", LIST_SIZE).with_position(at).with_resizable(true);
             ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("list"), builder, move |ctx, _| {
+                platform::activate(ctx);
                 list.lock().unwrap().ui(ctx);
                 if ctx.input(|i| i.viewport().close_requested()) {
                     list.lock().unwrap().cancel_capture();
@@ -884,9 +672,10 @@ impl eframe::App for Resident {
         if self.add_open.load(SeqCst) {
             let (add, open) = (self.add.clone(), self.add_open.clone());
             let builder = window_builder("Nouvelle priorité", ADD_SIZE)
-                .with_position(centered(ADD_SIZE, ctx.pixels_per_point()))
+                .with_position(centered(ctx, ADD_SIZE))
                 .with_resizable(false);
             ctx.show_viewport_deferred(egui::ViewportId::from_hash_of("add"), builder, move |ctx, _| {
+                platform::activate(ctx);
                 add.lock().unwrap().ui(ctx);
                 if ctx.input(|i| i.viewport().close_requested()) {
                     open.store(false, SeqCst);
@@ -898,18 +687,26 @@ impl eframe::App for Resident {
 }
 
 fn style(ctx: &egui::Context) {
-    // Polices systeme Windows: Segoe UI (regular + semibold), zero asset embarque.
+    // System fonts, no asset shipped: the first candidate that reads wins.
     let mut fonts = egui::FontDefinitions::default();
     let mut prop = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    if let Ok(b) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
-        fonts.font_data.insert("segoe".into(), Arc::new(egui::FontData::from_owned(b)));
-        prop.insert(0, "segoe".into());
-    }
+    let mut load = |name: &str, candidates: &[(&str, u32)], family: &mut Vec<String>| {
+        for (file, index) in candidates {
+            if let Ok(bytes) = std::fs::read(file) {
+                let data = egui::FontData {
+                    font: bytes.into(),
+                    index: *index,
+                    tweak: Default::default(),
+                };
+                fonts.font_data.insert(name.into(), Arc::new(data));
+                family.insert(0, name.into());
+                return;
+            }
+        }
+    };
+    load("system", platform::FONT_REGULAR, &mut prop);
     let mut sb = prop.clone();
-    if let Ok(b) = std::fs::read(r"C:\Windows\Fonts\seguisb.ttf") {
-        fonts.font_data.insert("segoe-sb".into(), Arc::new(egui::FontData::from_owned(b)));
-        sb.insert(0, "segoe-sb".into());
-    }
+    load("system-semibold", platform::FONT_SEMIBOLD, &mut sb);
     fonts.families.insert(FontFamily::Proportional, prop);
     fonts.families.insert(semibold(), sb);
     ctx.set_fonts(fonts);
@@ -951,7 +748,7 @@ fn style(ctx: &egui::Context) {
     });
 }
 
-/// Fond arrondi + bordure de la fenetre sans decoration, et gestion Echap.
+/// Rounded background and border of the undecorated window, and the Escape key.
 fn window_chrome(ctx: &egui::Context, ui: &egui::Ui) {
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && ctx.memory(|m| m.focused().is_none()) {
         ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -960,7 +757,7 @@ fn window_chrome(ctx: &egui::Context, ui: &egui::Ui) {
     ui.painter().rect(r, RADIUS, BG, Stroke::new(1.0_f32, BORDER), StrokeKind::Inside);
 }
 
-/// Barre de titre maison: zone de drag + bouton fermer. Retourne le rect libre entre les deux.
+/// Home-made title bar: a drag area and a close button. Returns the free rect between them.
 fn title_bar(ui: &mut egui::Ui, height: f32) -> Rect {
     let bar = Rect::from_min_size(ui.max_rect().min, vec2(ui.max_rect().width(), height));
     let drag = ui.interact(bar, Id::new("titlebar"), Sense::drag());
@@ -984,7 +781,7 @@ fn title_bar(ui: &mut egui::Ui, height: f32) -> Rect {
     Rect::from_min_max(bar.min, pos2(close.left() - 8.0, bar.max.y))
 }
 
-/// Poignee de redimensionnement en bas a droite.
+/// Resize grip, bottom right.
 fn resize_grip(ui: &mut egui::Ui) {
     let r = ui.max_rect();
     let grip = Rect::from_min_max(pos2(r.right() - 18.0, r.bottom() - 18.0), r.max);
@@ -1029,7 +826,7 @@ fn avatar(ui: &mut egui::Ui, name: &str) {
     );
 }
 
-/// Bouton rond "fait" / "restaurer". Retourne true si clique.
+/// Round "done" / "restore" button. True when clicked.
 fn round_button(ui: &mut egui::Ui, id: Id, glyph: &str, tip: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
     let t = ui.ctx().animate_bool(id, resp.hovered());
@@ -1042,7 +839,7 @@ fn round_button(ui: &mut egui::Ui, id: Id, glyph: &str, tip: &str) -> bool {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked()
 }
 
-/// Petit bouton texte sans cadre (chevron, actions secondaires).
+/// Small frameless text button (chevron, secondary actions).
 fn icon_button(ui: &mut egui::Ui, glyph: &str, size: f32, color: Color32, tip: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
     let c = if resp.hovered() { TEXT } else { color };
@@ -1061,7 +858,7 @@ fn text_button(ui: &mut egui::Ui, text: &str, color: Color32) -> bool {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
-// ---------- fenetre d'ajout ----------
+// ---------- capture window ----------
 
 #[derive(Default)]
 struct Add {
@@ -1074,13 +871,13 @@ struct Add {
     focused: bool,
     notes_focused: bool,
     cal_view: Option<(i32, u32)>,
-    names: Vec<String>, // demandeurs deja saisis, du plus frequent au moins frequent
+    names: Vec<String>, // requesters already entered, most frequent first
 }
 
 const ADD_SIZE: [f32; 2] = [560.0, 304.0];
 const CAL_HEIGHT: f32 = 330.0;
 
-/// Personnes deja saisies (demandeurs et "en attente de"), de la plus frequente a la moins frequente.
+/// People already entered (requesters and "waiting on"), most frequent first.
 fn names(store: &Store) -> Vec<String> {
     let mut count: std::collections::HashMap<&str, usize> = Default::default();
     for t in store.active.iter().chain(&store.done) {
@@ -1093,7 +890,7 @@ fn names(store: &Store) -> Vec<String> {
     v.into_iter().map(|(n, _)| n.to_string()).collect()
 }
 
-/// Rangee de chips: noms filtres par ce qui est tape. Retourne le nom choisi.
+/// Row of chips: names filtered by what is typed. Returns the one picked.
 fn name_chips(ui: &mut egui::Ui, names: &[String], typed: &str) -> Option<String> {
     let typed = typed.trim().to_lowercase();
     let sugg: Vec<&String> = names
@@ -1115,8 +912,8 @@ fn name_chips(ui: &mut egui::Ui, names: &[String], typed: &str) -> Option<String
     pick
 }
 
-/// Suffixe qui completerait `text` (ou son dernier segment apres virgule si `multi`)
-/// avec le premier candidat qui commence pareil (insensible a la casse).
+/// The suffix that would complete `text` (or its last comma-separated segment when `multi`)
+/// with the first candidate that starts the same way, case insensitive.
 fn completion(text: &str, candidates: &[String], multi: bool) -> Option<String> {
     let seg = if multi { text.rsplit(',').next().unwrap_or("") } else { text }.trim_start();
     if seg.is_empty() {
@@ -1129,12 +926,12 @@ fn completion(text: &str, candidates: &[String], multi: bool) -> Option<String> 
         .map(|c| c.chars().skip(seg.chars().count()).collect())
 }
 
-/// Champ texte avec completion fantome: le suffixe propose s'affiche en grise apres la saisie,
-/// Tab l'accepte. Sans proposition, Tab garde son role (champ suivant).
+/// Text field with a ghost completion: the suggested suffix shows greyed after the input and
+/// Tab accepts it. With nothing to suggest, Tab keeps its usual role (next field).
 fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32, candidates: &[String], multi: bool) -> egui::Response {
     let id = Id::new("complete").with(hint_s);
-    // Tab n'est retenu (lock_focus) que si le tour precedent affichait une proposition ;
-    // egui n'insere pas de tabulation dans un champ monoligne, on lit donc la touche.
+    // Tab is held (lock_focus) only when the previous frame had something to suggest; egui
+    // does not insert a tab in a single-line field, so the key is read directly.
     let had = ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
     let out = TextEdit::singleline(text)
         .hint_text(hint(hint_s))
@@ -1146,7 +943,7 @@ fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32
     let mut sugg = completion(text, candidates, multi);
     if had && focused && ui.input(|i| i.key_pressed(egui::Key::Tab)) {
         if sugg.take().is_some() {
-            // remplace le segment tape par la forme canonique du candidat ("cl" -> "Client")
+            // replace the typed segment with the candidate's canonical form ("cl" -> "Client")
             let seg_chars = if multi {
                 text.rsplit(',').next().unwrap_or("")
             } else {
@@ -1169,9 +966,9 @@ fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32
                 *text = text.chars().take(keep).collect::<String>() + &full;
             }
             if multi {
-                text.push_str(", "); // pret pour le tag suivant
+                text.push_str(", "); // ready for the next tag
             }
-            // curseur en fin de champ (egui l'aurait laisse avant le suffixe)
+            // cursor at the end of the field (egui would have left it before the suffix)
             let mut state = out.state;
             state
                 .cursor
@@ -1184,14 +981,15 @@ fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32
         ui.painter()
             .text(at, Align2::LEFT_TOP, format!("{suf}   Tab"), font, DIM.lerp_to_gamma(MUTED, 0.5));
     }
-    // Toute valeur lue sur le contexte (has_focus, input) doit l'etre AVANT ce verrou d'ecriture:
-    // un acces au contexte depuis la fermeture bloque le thread (verrou non reentrant).
+    // Anything read from the context (has_focus, input) has to be read BEFORE this write lock:
+    // reaching the context from inside the closure deadlocks the thread (the lock is not
+    // reentrant).
     let show_next = sugg.is_some() && focused;
     ui.ctx().data_mut(|d| d.insert_temp(id, show_next));
     out.response
 }
 
-/// "rh, Support N2, #mira" -> ["rh", "Support N2", "mira"], sans doublon (insensible a la casse).
+/// "rh, Support N2, #mira" -> ["rh", "Support N2", "mira"], no duplicates, case insensitive.
 fn parse_tags(s: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for t in s
@@ -1206,7 +1004,7 @@ fn parse_tags(s: &str) -> Vec<String> {
     out
 }
 
-/// Ajoute le tag au champ texte s'il n'y est pas, le retire sinon.
+/// Adds the tag to the text field if it is missing, removes it otherwise.
 fn toggle_tag(text: &mut String, tag: &str) {
     let mut tags = parse_tags(text);
     match tags.iter().position(|t| t.eq_ignore_ascii_case(tag)) {
@@ -1218,7 +1016,7 @@ fn toggle_tag(text: &mut String, tag: &str) {
     *text = tags.join(", ");
 }
 
-/// Tous les tags du store, du plus utilise au moins utilise, avec leur nombre d'occurrences.
+/// Every tag in the store, most used first, with how often it appears.
 fn tags_all(store: &Store) -> Vec<(String, usize)> {
     let mut count: Vec<(String, usize)> = Vec::new();
     for t in store.active.iter().chain(&store.done).flat_map(|t| &t.tags) {
@@ -1235,7 +1033,7 @@ fn tag_color(tag: &str) -> Color32 {
     AVATARS[tag.to_lowercase().bytes().map(usize::from).sum::<usize>() % AVATARS.len()]
 }
 
-/// Petite pastille de tag. Retourne true si cliquee.
+/// Small tag pill. True when clicked.
 fn tag_pill(ui: &mut egui::Ui, tag: &str, selected: bool) -> bool {
     let c = tag_color(tag);
     let fg = if selected { BG } else { c };
@@ -1251,7 +1049,7 @@ fn tag_pill(ui: &mut egui::Ui, tag: &str, selected: bool) -> bool {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
-/// Rangee des tags connus, ceux presents dans `text` en surbrillance ; clic = bascule dans `text`.
+/// Row of known tags, the ones present in `text` highlighted; a click toggles it in `text`.
 fn tag_chips(ui: &mut egui::Ui, all: &[(String, usize)], text: &mut String) -> bool {
     if all.is_empty() {
         return false;
@@ -1273,7 +1071,7 @@ fn tag_chips(ui: &mut egui::Ui, all: &[(String, usize)], text: &mut String) -> b
 
 impl Add {
     fn new() -> Add {
-        // `priority add cal` ouvre directement le calendrier (captures d'ecran / tests visuels).
+        // `prio add cal` opens straight on the calendar (screenshots, visual tests).
         let cal_view = (std::env::args().nth(2).as_deref() == Some("cal")).then(|| (Date::today().0, Date::today().1));
         let store = load();
         Add {
@@ -1296,7 +1094,7 @@ impl eframe::App for Add {
 }
 
 impl Add {
-    /// Fenetre d'ajout. Sert au one-shot (viewport racine) et au resident (viewport enfant).
+    /// The capture window. Serves the one-shot mode (root viewport) and the resident (child viewport).
     fn ui(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -1357,7 +1155,7 @@ impl Add {
                     if cal.hovered() || self.cal_view.is_some() { ACCENT } else { MUTED },
                 );
                 if cal.clicked() {
-                    // Calendrier inline: la fenetre grandit le temps de la saisie.
+                    // Inline calendar: the window grows while a date is being picked.
                     self.cal_view = if self.cal_view.is_some() {
                         None
                     } else {
@@ -1415,14 +1213,17 @@ impl Add {
             self.notes_focused = n.has_focus();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
-                    RichText::new("Entrée ✔ valider   ·   Ctrl+Entrée depuis les notes   ·   Échap annuler")
-                        .size(12.0)
-                        .color(MUTED),
+                    RichText::new(format!(
+                        "Entrée ✔ valider   ·   {}+Entrée depuis les notes   ·   Échap annuler",
+                        platform::CMD_LABEL
+                    ))
+                    .size(12.0)
+                    .color(MUTED),
                 );
             });
         });
 
-        // Entree valide partout, sauf dans les notes ou elle fait un retour a la ligne (Ctrl+Entree valide).
+        // Enter saves everywhere except in the notes, where it breaks the line (the command key saves).
         let (enter, ctrl) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.modifiers.command));
         if enter && (ctrl || !self.notes_focused) && !self.title.trim().is_empty() && !bad_deadline {
             let mut store = load();
@@ -1441,23 +1242,23 @@ impl Add {
     }
 }
 
-// ---------- fenetre liste ----------
+// ---------- list window ----------
 
 struct List {
     store: Store,
     names: Vec<String>,
     tags_all: Vec<(String, usize)>,
-    filter: Option<String>, // tag selectionne en tete de liste
+    filter: Option<String>, // tag picked at the top of the list
     show_done: bool,
     focused: bool,
-    mtime: Option<std::time::SystemTime>, // date de tasks.json au dernier chargement
-    open: Option<(bool, usize)>,          // carte depliee: (archives ?, index)
+    mtime: Option<std::time::SystemTime>, // tasks.json timestamp at the last load
+    open: Option<(bool, usize)>,          // unfolded card: (archived?, index)
     copied_at: Option<f64>,
-    quit: Option<Arc<std::sync::atomic::AtomicBool>>, // Some en mode resident: bouton "Quitter"
+    quit: Option<Arc<std::sync::atomic::AtomicBool>>, // Some in resident mode: the "Quitter" button
     settings: Settings,
     show_settings: bool,
-    capture: Option<usize>,                                 // raccourci en cours de saisie (HK_ADD / HK_LIST)
-    hk_status: Option<Arc<std::sync::atomic::AtomicUsize>>, // echecs d'enregistrement (mode resident)
+    capture: Option<usize>,                                 // shortcut being entered (HK_ADD / HK_LIST)
+    hk_status: Option<Arc<std::sync::atomic::AtomicUsize>>, // registration failures (resident mode)
 }
 
 impl List {
@@ -1478,26 +1279,26 @@ impl List {
             copied_at: None,
             quit,
             settings: load_settings(),
-            // PRIO_TEST_SETTINGS=1 ouvre directement le panneau Reglages (captures d'ecran)
+            // PRIO_TEST_SETTINGS=1 opens straight on the settings panel (screenshots)
             show_settings: std::env::var_os("PRIO_TEST_SETTINGS").is_some(),
             capture: None,
             hk_status,
         }
     }
 
-    /// Abandonne une saisie de raccourci en cours et rend leurs raccourcis au resident.
+    /// Drops a shortcut capture in progress and gives the resident its shortcuts back.
     fn cancel_capture(&mut self) {
         if self.capture.take().is_some() {
-            notify_hotkeys_changed();
+            platform::notify_hotkeys_changed();
         }
     }
 
-    /// Panneau Reglages: les deux raccourcis, saisis en appuyant sur la combinaison.
+    /// Settings panel: the two shortcuts, each set by pressing the combination.
     fn settings_view(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.label(RichText::new("Raccourcis clavier").font(FontId::new(15.0, semibold())).color(TEXT));
         ui.label(
-            RichText::new("Ctrl et/ou Alt (Shift en plus si besoin), puis une lettre, un chiffre, F1 à F24 ou Espace.")
+            RichText::new(format!("{}, puis une lettre, un chiffre, F1 à F24 ou Espace.", platform::MODS_HINT))
                 .size(12.5)
                 .color(MUTED),
         );
@@ -1525,10 +1326,10 @@ impl List {
                 if text_button(ui, &text, if capturing { AMBER } else { ACCENT }) {
                     if capturing {
                         self.capture = None;
-                        notify_hotkeys_changed();
+                        platform::notify_hotkeys_changed();
                     } else {
                         self.capture = Some(which);
-                        suspend_hotkeys();
+                        platform::suspend_hotkeys();
                     }
                 }
                 if status & bit != 0 {
@@ -1550,10 +1351,11 @@ impl List {
         }
         ui.add_space(14.0);
         ui.horizontal(|ui| {
-            if chip(ui, "Réinitialiser (Ctrl+Alt+A / Ctrl+Alt+P)") {
-                self.settings = Settings::default();
+            let d = Settings::default();
+            if chip(ui, &format!("Réinitialiser ({} / {})", d.hotkey_add, d.hotkey_list)) {
+                self.settings = d;
                 save_settings(&self.settings);
-                notify_hotkeys_changed();
+                platform::notify_hotkeys_changed();
             }
         });
         ui.add_space(10.0);
@@ -1570,7 +1372,7 @@ impl List {
     }
 }
 
-/// Roue crantee peinte (bouton Reglages).
+/// Painted gear (the settings button).
 fn gear_icon(p: &egui::Painter, c: egui::Pos2, color: Color32) {
     p.circle_stroke(c, 5.0, Stroke::new(1.6_f32, color));
     for k in 0..8 {
@@ -1591,20 +1393,20 @@ impl eframe::App for List {
 }
 
 impl List {
-    /// Fenetre liste. Sert au one-shot (viewport racine) et au resident (viewport enfant).
+    /// The list window. Serves the one-shot mode (root viewport) and the resident (child viewport).
     fn ui(&mut self, ctx: &egui::Context) {
         let today = Date::today();
 
-        // La fenetre d'ajout (autre viewport ou autre process) ecrit le fichier pendant que la
-        // liste vit en memoire: on recharge des que sa date de modification change, et aussi a la
-        // reprise du focus (filet de securite si l'horodatage ne bouge pas).
+        // The capture window (another viewport or another process) writes the file while the
+        // list lives in memory: reload as soon as its timestamp changes, and again when focus
+        // comes back, as a safety net should the timestamp not move.
         let focused = ctx.input(|i| i.focused);
         let mtime = std::fs::metadata(path(FILE)).and_then(|m| m.modified()).ok();
         if mtime != self.mtime || (focused && !self.focused) {
             self.store = load();
-            // Nos propres ecritures repassent par ici (la date du fichier change): pas de tri
-            // tant qu'une carte est ouverte, sinon son index designe une autre tache et la
-            // frappe suivante atterrit dedans (chaque lettre sur un ticket different).
+            // Our own writes come back through here (the file timestamp moves): no sorting
+            // while a card is open, or its index would point at another task and the next
+            // keystroke would land in it (every letter on a different ticket).
             if self.open.is_none() {
                 sort_waiting(&mut self.store.active);
             }
@@ -1614,12 +1416,12 @@ impl List {
         }
         self.focused = focused;
 
-        // Saisie d'un raccourci: la premiere combinaison valable est enregistree, Echap annule
-        // (et n'atteint pas window_chrome, qui fermerait la fenetre).
+        // Capturing a shortcut: the first valid combination is saved, Escape cancels (and does
+        // not reach window_chrome, which would close the window).
         if let Some(which) = self.capture {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.capture = None;
-                notify_hotkeys_changed();
+                platform::notify_hotkeys_changed();
                 ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             } else if let Some(label) = ctx.input(|i| {
                 i.events.iter().find_map(|e| match e {
@@ -1628,7 +1430,7 @@ impl List {
                         pressed: true,
                         modifiers,
                         ..
-                    } => hotkey_label(*key, *modifiers),
+                    } => platform::hotkey_label(*key, *modifiers),
                     _ => None,
                 })
             }) {
@@ -1638,7 +1440,7 @@ impl List {
                     self.settings.hotkey_list = label;
                 }
                 save_settings(&self.settings);
-                notify_hotkeys_changed();
+                platform::notify_hotkeys_changed();
                 self.capture = None;
             }
         }
@@ -1667,7 +1469,7 @@ impl List {
                 );
             }
 
-            // bascule en cours / archives, dans la barre de titre
+            // active / archived switch, in the title bar
             let other = if self.show_done {
                 format!("En cours  {}", self.store.active.len())
             } else {
@@ -1698,7 +1500,7 @@ impl List {
                 self.open = None;
             }
 
-            // roue crantee: reglages
+            // gear: settings
             let grect = Rect::from_center_size(pos2(orect.left() - 20.0, bar.center().y), vec2(28.0, 28.0));
             let gr = ui
                 .interact(grect, Id::new("settings"), Sense::click())
@@ -1717,7 +1519,7 @@ impl List {
                 self.cancel_capture();
             }
 
-            // pied: rappel des gestes
+            // footer: a reminder of the gestures
             let foot = pos2(ui.max_rect().left() + 16.0, ui.max_rect().bottom() - 14.0);
             let hint = if self.show_done {
                 "clic = notes  ·  ↩ remet en cours  ·  Échap ferme".to_string()
@@ -1735,12 +1537,15 @@ impl List {
                 DIM.lerp_to_gamma(MUTED, 0.5),
             );
             if let Some(quit) = &self.quit {
-                // seul moyen propre d'arreter le process resident (pas d'icone de zone de notification)
+                // the only clean way to stop the resident process when there is no tray icon
                 let q = Rect::from_center_size(pos2(ui.max_rect().right() - 46.0, foot.y), vec2(48.0, 20.0));
                 let r = ui
                     .interact(q, Id::new("quit"), Sense::click())
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("Arrêter Prio (les raccourcis Ctrl+Alt+A / P ne répondront plus)");
+                    .on_hover_text(format!(
+                        "Arrêter Prio ({} / {} ne répondront plus)",
+                        self.settings.hotkey_add, self.settings.hotkey_list
+                    ));
                 ui.painter().text(
                     q.center(),
                     Align2::CENTER_CENTER,
@@ -1754,7 +1559,7 @@ impl List {
                 }
             }
 
-            // filtre par tag: une rangee de pastilles sous le titre, le tag actif en plein
+            // tag filter: a row of pills under the title, the active one filled
             let mut top = bar.bottom() + 4.0;
             if !self.tags_all.is_empty() && !self.show_settings {
                 let row = Rect::from_min_max(
@@ -1792,10 +1597,10 @@ fn empty_state(ui: &mut egui::Ui, msg: &str) {
 }
 
 struct CardOut {
-    action: bool,  // archiver / restaurer
-    toggle: bool,  // plier / deplier
-    changed: bool, // notes ou "en attente" modifiees
-    rect: Rect,    // emprise de la carte (cible du drag & drop)
+    action: bool,  // archive / restore
+    toggle: bool,  // fold / unfold
+    changed: bool, // notes or "waiting on" edited
+    rect: Rect,    // the card's extent (drag and drop target)
 }
 
 impl Default for CardOut {
@@ -1812,7 +1617,7 @@ impl Default for CardOut {
 impl List {
     fn active_view(&mut self, ui: &mut egui::Ui, today: Date) {
         if self.store.active.is_empty() {
-            empty_state(ui, "Rien en attente.  Ctrl+Alt+A pour ajouter.");
+            empty_state(ui, &format!("Rien en attente.  {} pour ajouter.", self.settings.hotkey_add));
         }
         let mut out = Vec::new();
         let mut rows = Vec::new();
@@ -1822,8 +1627,8 @@ impl List {
         let filter = self.filter.clone();
         let keep = |t: &Task| filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f)));
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // Pendant un drag, le pointeur pres du bord haut/bas fait defiler la
-            // liste, sinon une carte ne peut pas remonter au-dela de l'ecran.
+            // While dragging, a pointer near the top or bottom edge scrolls the list, or a
+            // card could never travel past the edge of the screen.
             if egui::DragAndDrop::has_any_payload(ui.ctx())
                 && let Some(pos) = ui.ctx().pointer_interact_pos()
             {
@@ -1831,7 +1636,7 @@ impl List {
                 let edge = 48.0;
                 let dy = (clip.top() + edge - pos.y).max(0.0) + (clip.bottom() - edge - pos.y).min(0.0);
                 if dy != 0.0 {
-                    // ponytail: vitesse par frame, pas par seconde; suffisant a 60 Hz.
+                    // ponytail: speed per frame, not per second; good enough at 60 Hz.
                     ui.scroll_with_delta_animation(vec2(0.0, dy * 0.3), egui::style::ScrollAnimation::none());
                     ui.ctx().request_repaint();
                 }
@@ -1858,9 +1663,9 @@ impl List {
             }
         });
 
-        // Drag & drop: la cible d'insertion est deduite de la position du
-        // pointeur par rapport au milieu de chaque carte.
-        // ponytail: pas de reordonnancement sous filtre (les positions affichees ne sont pas les index reels).
+        // Drag and drop: the insertion target comes from where the pointer sits relative to
+        // the middle of each card.
+        // ponytail: no reordering under a filter (the positions on show are not the real indices).
         let ctx = ui.ctx().clone();
         if filter.is_some() {
             egui::DragAndDrop::clear_payload(&ctx);
@@ -1876,8 +1681,8 @@ impl List {
                 if ui.input(|i| i.pointer.any_released()) {
                     egui::DragAndDrop::clear_payload(&ctx);
                     reorder(&mut self.store.active, from, to);
-                    // ponytail: le tri actives/en attente est reapplique, un drag qui
-                    // traverse la frontiere est annule silencieusement.
+                    // ponytail: the active/waiting sort is applied again, so a drag that
+                    // crosses the boundary is silently undone.
                     sort_waiting(&mut self.store.active);
                     self.open = None;
                     save(&self.store);
@@ -1900,7 +1705,7 @@ impl List {
                 save(&self.store);
             }
         }
-        // Une tache passee "en attente" (ou l'inverse) change de section quand on quitte le champ.
+        // A task moved to "waiting" (or back) changes section when the field loses focus.
         if self.open.is_none()
             && self
                 .store
@@ -1993,8 +1798,8 @@ impl List {
     }
 }
 
-/// Une carte, pliee ou depliee (notes + en attente de).
-#[allow(clippy::too_many_arguments)] // ponytail: un struct de contexte le jour ou un 9e parametre arrive
+/// One card, folded or unfolded (notes and waiting on).
+#[allow(clippy::too_many_arguments)] // ponytail: a context struct the day a 9th parameter shows up
 fn card(
     ui: &mut egui::Ui,
     idx: usize,
@@ -2026,7 +1831,7 @@ fn card(
     let t_hover = ui.ctx().animate_bool(id.with("anim"), was_hovered);
     let dimmed = archived.is_some() || waiting || stale;
 
-    // Pastille de droite (echeance ou stagnation), calculee d'avance pour borner la largeur du titre.
+    // The right-hand pill (deadline or staleness), measured first to bound the title width.
     let pill_txt: Option<(String, Color32)> = match (deadline, days) {
         (Some(d), Some(n)) => Some(match (archived.is_some(), n) {
             (true, _) => (format!("échéance {}", d.fr()), MUTED),
@@ -2050,10 +1855,10 @@ fn card(
         .as_ref()
         .map(|(s, _)| ui.painter().layout_no_wrap(s.clone(), FontId::proportional(12.0), MUTED).size().x + 18.0 + 8.0)
         .unwrap_or(0.0);
-    let right_w = 26.0 + 8.0 + 22.0 + 8.0 + pill_w; // bouton rond + chevron + pastille
+    let right_w = 26.0 + 8.0 + 22.0 + 8.0 + pill_w; // round button, chevron, pill
 
-    // Clic sur le corps de la carte = deplier. Enregistre AVANT le contenu (avec
-    // l'emprise du tour precedent) pour que boutons et champs gardent la priorite.
+    // A click on the body of the card unfolds it. Registered BEFORE the content (with the
+    // extent from the previous frame) so buttons and fields keep priority.
     if !open
         && let Some(prev) = ui.ctx().data(|d| d.get_temp::<Rect>(id.with("rect")))
         && ui.interact(prev, id.with("body"), Sense::click()).clicked()
@@ -2072,7 +1877,7 @@ fn card(
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             if let Some(r) = rank {
-                // Poignee de drag: points + numero de rang. Seule zone qui declenche le deplacement.
+                // Drag handle: the dots and the rank number. The only area that starts a move.
                 ui.dnd_drag_source(Id::new("prio").with(idx), idx, |ui| {
                     let (dots, _) = ui.allocate_exact_size(vec2(10.0, 34.0), Sense::hover());
                     for row in 0..3 {
@@ -2095,7 +1900,7 @@ fn card(
                 ui.label(RichText::new(&t.title).font(FontId::new(15.0, semibold())).color(color));
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend); // chaque element reste entier, le repli se fait entre eux
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend); // each item stays whole, wrapping happens between them
                     let meta = |s: String| RichText::new(s).size(12.0).color(MUTED);
                     for tag in &t.tags {
                         tag_pill(ui, tag, false);
@@ -2174,7 +1979,7 @@ fn card(
                     }
                 });
             }
-            // tags: champ texte + pastilles a bascule (memes tags que dans l'ajout)
+            // tags: a text field and toggle pills (the same tags as in the capture window)
             let mut tags_text = t.tags.join(", ");
             ui.horizontal(|ui| {
                 ui.label(RichText::new("tags").size(12.5).color(MUTED));
@@ -2198,15 +2003,15 @@ fn card(
                         out.changed = true;
                     }
                 });
-                // memes personnes que les demandeurs: chips de suggestion
+                // the same people as the requesters: suggestion chips
                 if let Some(n) = name_chips(ui, names, &t.waiting) {
                     t.waiting = n;
                     out.changed = true;
                 }
             } else {
-                // Date d'archivage corrigeable (une tache finie hier, archivee aujourd'hui).
-                // Le brouillon vit dans la memoire egui tant que le champ a le focus,
-                // le stockage ne recoit que des dates valides, en ISO.
+                // The archive date can be corrected (a task finished yesterday, archived today).
+                // The draft lives in egui's memory while the field has focus; only valid dates,
+                // in ISO, reach the store.
                 let bid = id.with("arch");
                 let mut buf: String = ui
                     .ctx()
@@ -2280,14 +2085,14 @@ mod tests {
     fn dates() {
         let today = Date(2026, 9, 9);
         assert_eq!(Date(1970, 1, 1).days(), 0);
-        assert_eq!(Date(2000, 3, 1).days() - Date(2000, 2, 28).days(), 2); // bissextile
+        assert_eq!(Date(2000, 3, 1).days() - Date(2000, 2, 28).days(), 2); // leap year
         assert_eq!(Date::parse("15/09", today), Some(Date(2026, 9, 15)));
         assert_eq!(Date::parse("15/09/26", today), Some(Date(2026, 9, 15)));
         assert_eq!(Date::parse("2026-09-15", today), Some(Date(2026, 9, 15)));
         assert_eq!(Date::parse("32/09", today), None);
         assert_eq!(Date::parse("lundi", today), None);
         assert_eq!(Date(2026, 9, 15).days() - today.days(), 6);
-        // aller-retour days <-> date, jour de semaine (2026-09-09 est un mercredi)
+        // round trip days <-> date, and weekday (2026-09-09 is a Wednesday)
         for d in [
             Date(1970, 1, 1),
             Date(2000, 2, 29),
@@ -2301,23 +2106,6 @@ mod tests {
         assert_eq!(Date(2026, 9, 14).weekday(), 0);
         assert_eq!(today.plus(30), Date(2026, 10, 9));
         assert_eq!(Date::parse(&Date(2026, 9, 15).fr(), today), Some(Date(2026, 9, 15)));
-    }
-
-    #[test]
-    fn hotkey_parsing() {
-        assert_eq!(parse_hotkey("Ctrl+Alt+A"), Some((0x0003, 0x41)));
-        assert_eq!(parse_hotkey("ctrl + shift + f5"), Some((0x0006, 0x74)));
-        assert_eq!(parse_hotkey("Alt+Espace"), Some((0x0001, 0x20)));
-        assert_eq!(parse_hotkey("Shift+A"), None); // pas de Ctrl/Alt
-        assert_eq!(parse_hotkey("Ctrl+Alt+Entrée"), None);
-        assert_eq!(parse_hotkey("Ctrl+Alt+F25"), None);
-        let m = egui::Modifiers {
-            ctrl: true,
-            alt: true,
-            ..Default::default()
-        };
-        assert_eq!(hotkey_label(egui::Key::A, m), Some("Ctrl+Alt+A".into()));
-        assert_eq!(hotkey_label(egui::Key::A, egui::Modifiers::default()), None);
     }
 
     #[test]

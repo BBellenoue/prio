@@ -1,17 +1,17 @@
-# Installe Prio en mode resident:
-#  - demarrage a l'ouverture de session (dossier Startup), sans argument => process resident,
-#    raccourcis globaux Ctrl+Alt+A (ajouter) et Ctrl+Alt+P (liste), icone de zone de notification ;
-#  - un raccourci "Prio" dans le menu Demarrer (reveille le resident, ou le lance s'il est absent).
-# Depuis un zip de release, prio.exe est a cote du script; depuis le depot, dans target\release.
+# Installs Prio as a resident:
+#  - started at login (the Startup folder), with no argument, so the resident process takes the
+#    Ctrl+Alt+A (capture) and Ctrl+Alt+P (list) global shortcuts and shows a notification icon;
+#  - a "Prio" shortcut in the Start menu (wakes the resident, or starts it when absent).
+# From a release zip, prio.exe sits next to the script; from the repository, in target\release.
 $exe = Join-Path $PSScriptRoot "prio.exe"
 if (-not (Test-Path $exe)) { $exe = Join-Path $PSScriptRoot "target\release\prio.exe" }
 $menu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $startup = Join-Path $menu "Startup"
 $sh = New-Object -ComObject WScript.Shell
 
-# anciens raccourcis (nom "Priorites", .lnk a touche de raccourci Windows)
+# old shortcuts (named "Priorites", .lnk with a Windows hotkey)
 foreach ($old in @((Join-Path $menu "Priorite - Ajouter.lnk"), (Join-Path $menu "Priorites.lnk"), (Join-Path $startup "Priorites.lnk"))) {
-    if (Test-Path $old) { Remove-Item $old; Write-Host "supprime: $old" }
+    if (Test-Path $old) { Remove-Item $old; Write-Host "removed: $old" }
 }
 
 foreach ($s in @(
@@ -24,11 +24,11 @@ foreach ($s in @(
     $lnk.WorkingDirectory = Split-Path $exe
     $lnk.Description = $s.Desc
     $lnk.Save()
-    Write-Host "cree: $($s.Path)"
+    Write-Host "created: $($s.Path)"
 }
 
-# Redemarre le resident sur la nouvelle version.
+# Restart the resident on the new build.
 Get-Process priority, prio -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 Start-Process $exe
-Write-Host "Prio lance. Ctrl+Alt+A ajouter, Ctrl+Alt+P liste."
+Write-Host "Prio started. Ctrl+Alt+A to capture, Ctrl+Alt+P for the list."
