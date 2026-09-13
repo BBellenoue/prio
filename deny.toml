@@ -2,7 +2,7 @@
 # meme commande en CI (workflow Security).
 
 [graph]
-targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin"]
+targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
 all-features = true
 
 [advisories]
@@ -13,6 +13,9 @@ ignore = [
     { id = "RUSTSEC-2026-0192", reason = "transitive via egui/ab_glyph, pas de correctif amont" },
     # paste declare non maintenu ; tire par metal, le backend wgpu obligatoire sur macOS.
     { id = "RUSTSEC-2024-0436", reason = "transitive via wgpu/metal, pas de correctif amont" },
+    # proc-macro-error declare non maintenu ; tire par gtk3-macros, donc par l'icone de zone
+    # de notification sous Linux.
+    { id = "RUSTSEC-2024-0370", reason = "transitive via tray-icon/gtk, pas de correctif amont" },
 ]
 
 [licenses]
