@@ -316,6 +316,37 @@ impl Level {
     }
 }
 
+/// How much of a slot a task needs. Three closed steps, never empty: the question it
+/// answers is "I have twenty minutes, what fits".
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Effort {
+    Quick,
+    #[default]
+    Hours,
+    Day,
+}
+
+impl Effort {
+    const ALL: [Effort; 3] = [Effort::Quick, Effort::Hours, Effort::Day];
+
+    fn label(self) -> &'static str {
+        match self {
+            Effort::Quick => "30 min",
+            Effort::Hours => "2 h",
+            Effort::Day => "1 jour",
+        }
+    }
+
+    fn bars(self) -> usize {
+        match self {
+            Effort::Quick => 1,
+            Effort::Hours => 2,
+            Effort::Day => 3,
+        }
+    }
+}
+
 /// An unknown value in a hand-edited tasks.json falls back to the default instead of
 /// dropping the whole file (`load` turns any parse error into an empty store).
 fn lenient<'de, D, T>(d: D) -> Result<T, D::Error>
@@ -348,6 +379,8 @@ struct Task {
     tags: Vec<String>,
     #[serde(deserialize_with = "lenient")]
     level: Level,
+    #[serde(deserialize_with = "lenient")]
+    effort: Effort,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -934,6 +967,7 @@ struct Add {
     cal_view: Option<(i32, u32)>,
     names: Vec<String>, // requesters already entered, most frequent first
     level: Level,
+    effort: Effort,
 }
 
 const ADD_SIZE: [f32; 2] = [560.0, 336.0];
@@ -1126,6 +1160,41 @@ fn level_chips(ui: &mut egui::Ui, current: Level) -> Option<Level> {
     pick
 }
 
+/// Row of effort pills, the current one filled. Some when another is picked.
+fn effort_chips(ui: &mut egui::Ui, current: Effort) -> Option<Effort> {
+    let mut pick = None;
+    for e in Effort::ALL {
+        if pill_button(ui, e.label(), MUTED, e == current) && e != current {
+            pick = Some(e);
+        }
+    }
+    pick
+}
+
+/// Efforts in use, with how often they appear. Empty when they are all the same: a filter
+/// on a single value filters nothing.
+fn efforts_all(items: &[Task]) -> Vec<(Effort, usize)> {
+    let v: Vec<(Effort, usize)> = Effort::ALL
+        .into_iter()
+        .map(|e| (e, items.iter().filter(|t| t.effort == e).count()))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    if v.len() < 2 { Vec::new() } else { v }
+}
+
+/// Effort: one, two or three bars of growing height, drawn in code.
+fn effort_bars(ui: &mut egui::Ui, e: Effort, color: Color32) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 26.0), Sense::hover());
+    let base = rect.center().y + 6.0;
+    for k in 0..3 {
+        let h = 5.0 + k as f32 * 3.5;
+        let x = rect.center().x - 6.5 + k as f32 * 4.5;
+        let bar = Rect::from_min_max(pos2(x, base - h), pos2(x + 3.0, base));
+        ui.painter().rect_filled(bar, 1.0, if k < e.bars() { color } else { DIM });
+    }
+    resp.on_hover_text(format!("effort : {}", e.label()));
+}
+
 /// Row of known tags, the ones present in `text` highlighted; a click toggles it in `text`.
 fn tag_chips(ui: &mut egui::Ui, all: &[(String, usize)], text: &mut String) -> bool {
     if all.is_empty() {
@@ -1211,6 +1280,10 @@ impl Add {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if let Some(l) = level_chips(ui, self.level) {
                     self.level = l;
+                }
+                ui.add_space(14.0);
+                if let Some(e) = effort_chips(ui, self.effort) {
+                    self.effort = e;
                 }
             });
             ui.add_space(4.0);
@@ -1319,6 +1392,7 @@ impl Add {
                 notes: self.notes.trim().to_string(),
                 tags: parse_tags(&self.tags),
                 level: self.level,
+                effort: self.effort,
                 ..Default::default()
             });
             save(&store);
@@ -1334,6 +1408,7 @@ struct List {
     names: Vec<String>,
     tags_all: Vec<(String, usize)>,
     filter: Option<String>, // tag picked at the top of the list
+    effort: Option<Effort>, // effort picked at the top of the list
     show_done: bool,
     focused: bool,
     mtime: Option<std::time::SystemTime>, // tasks.json timestamp at the last load
@@ -1357,6 +1432,7 @@ impl List {
             names,
             tags_all,
             filter: None,
+            effort: None,
             show_done: false,
             focused: false,
             mtime: std::fs::metadata(path(FILE)).and_then(|m| m.modified()).ok(),
@@ -1646,13 +1722,25 @@ impl List {
 
             // tag filter: a row of pills under the title, the active one filled
             let mut top = bar.bottom() + 4.0;
-            if !self.tags_all.is_empty() && !self.show_settings {
+            let efforts = efforts_all(if self.show_done { &self.store.done } else { &self.store.active });
+            if (!self.tags_all.is_empty() || !efforts.is_empty()) && !self.show_settings {
                 let row = Rect::from_min_max(
                     pos2(ui.max_rect().left() + 16.0, top),
                     pos2(ui.max_rect().right() - 16.0, top + 26.0),
                 );
                 let mut fui = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(Layout::left_to_right(Align::Center)));
                 fui.spacing_mut().item_spacing.x = 4.0;
+                let has_efforts = !efforts.is_empty();
+                for (e, n) in efforts {
+                    let on = self.effort == Some(e);
+                    if pill_button(&mut fui, &format!("{}  {n}", e.label()), MUTED, on) {
+                        self.effort = (!on).then_some(e);
+                        self.open = None;
+                    }
+                }
+                if has_efforts {
+                    fui.add_space(10.0);
+                }
                 for (tag, n) in self.tags_all.clone() {
                     let on = self.filter.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&tag));
                     if tag_pill(&mut fui, &format!("{tag}  {n}"), on) {
@@ -1755,7 +1843,10 @@ impl List {
         let names = self.names.clone();
         let tags_all = self.tags_all.clone();
         let filter = self.filter.clone();
-        let keep = |t: &Task| filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f)));
+        let effort = self.effort;
+        let keep = |t: &Task| {
+            filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f))) && effort.is_none_or(|e| t.effort == e)
+        };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             // While dragging, a pointer near the top or bottom edge scrolls the list, or a
             // card could never travel past the edge of the screen.
@@ -1836,7 +1927,7 @@ impl List {
         // the middle of each card.
         // ponytail: no reordering under a filter (the positions on show are not the real indices).
         let ctx = ui.ctx().clone();
-        if filter.is_some() {
+        if filter.is_some() || effort.is_some() {
             egui::DragAndDrop::clear_payload(&ctx);
         }
         if let (Some(from), Some(pos)) = (egui::DragAndDrop::payload::<usize>(&ctx).map(|p| *p), ctx.pointer_interact_pos())
@@ -1940,14 +2031,11 @@ impl List {
         let names = self.names.clone();
         let tags_all = self.tags_all.clone();
         let filter = self.filter.clone();
+        let effort = self.effort;
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for (i, t) in self
-                .store
-                .done
-                .iter_mut()
-                .enumerate()
-                .filter(|(_, t)| filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f))))
-            {
+            for (i, t) in self.store.done.iter_mut().enumerate().filter(|(_, t)| {
+                filter.as_deref().is_none_or(|f| t.tags.iter().any(|x| x.eq_ignore_ascii_case(f))) && effort.is_none_or(|e| t.effort == e)
+            }) {
                 let o = card(ui, i, None, t, today, open == Some((true, i)), &names, &tags_all);
                 if o.action || o.toggle || o.changed {
                     out.push((i, o));
@@ -2031,7 +2119,7 @@ fn card(
         .as_ref()
         .map(|(s, _)| ui.painter().layout_no_wrap(s.clone(), FontId::proportional(12.0), MUTED).size().x + 18.0 + 8.0)
         .unwrap_or(0.0);
-    let right_w = 26.0 + 8.0 + 22.0 + 8.0 + pill_w; // round button, chevron, pill
+    let right_w = 26.0 + 8.0 + 22.0 + 8.0 + pill_w + 18.0 + 8.0; // round button, chevron, pill, effort
 
     // A click on the body of the card unfolds it. Registered BEFORE the content (with the
     // extent from the previous frame) so buttons and fields keep priority.
@@ -2124,6 +2212,7 @@ fn card(
                 if let Some((txt, col)) = &pill_txt {
                     pill(ui, txt, *col);
                 }
+                effort_bars(ui, t.effort, if dimmed { DIM.lerp_to_gamma(MUTED, 0.7) } else { MUTED });
             });
         });
 
@@ -2176,6 +2265,12 @@ fn card(
                     ui.spacing_mut().item_spacing.x = 4.0;
                     if let Some(l) = level_chips(ui, t.level) {
                         t.level = l;
+                        out.changed = true;
+                    }
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("effort").size(12.5).color(MUTED));
+                    if let Some(e) = effort_chips(ui, t.effort) {
+                        t.effort = e;
                         out.changed = true;
                     }
                 });
@@ -2373,6 +2468,25 @@ mod tests {
         let items = [mk(Level::High), mk(Level::Low)];
         let rows = [row(30.0, 0, Level::High), row(230.0, 1, Level::Low)];
         assert_eq!(drop_slot(&items, &rows, Level::Mid, 150.0), 1);
+    }
+
+    #[test]
+    fn efforts() {
+        let mk = |effort: Effort| Task {
+            effort,
+            ..Default::default()
+        };
+        // a single value in use filters nothing, so no pill at all
+        assert!(efforts_all(&[mk(Effort::Hours), mk(Effort::Hours)]).is_empty());
+        assert_eq!(
+            efforts_all(&[mk(Effort::Day), mk(Effort::Quick), mk(Effort::Day)]),
+            vec![(Effort::Quick, 1), (Effort::Day, 2)]
+        );
+        assert_eq!(serde_json::to_string(&Effort::Quick).unwrap(), r#""quick""#);
+        let s: Store = serde_json::from_str(r#"{"active":[{"title":"x","effort":"30min"},{"title":"y","effort":"day"}]}"#).unwrap();
+        assert_eq!(s.active[0].effort, Effort::Hours); // unknown value, the task survives
+        assert_eq!(s.active[0].title, "x");
+        assert_eq!(s.active[1].effort, Effort::Day);
     }
 
     #[test]
