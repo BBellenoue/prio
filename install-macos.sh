@@ -37,6 +37,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+# Binaire non signe: sans cela Gatekeeper refuse ce qui vient d'une archive telechargee.
+xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
 echo "installe: $app"
 
 mkdir -p "$(dirname "$agent")"
