@@ -110,7 +110,9 @@ pub fn hotkey_label(key: eframe::egui::Key, mods: eframe::egui::Modifiers) -> Op
 }
 
 /// The screen holding that point, among rectangles given as (x, y, width, height) in one
-/// unit. The first match wins: overlapping screens mirror the same place.
+/// unit. The first match wins: overlapping screens mirror the same place. Windows names its
+/// screen through the system rather than picking from a list.
+#[cfg(unix)]
 pub fn screen_at(x: f32, y: f32, screens: &[(f32, f32, f32, f32)]) -> Option<eframe::egui::Rect> {
     use eframe::egui::{Rect, pos2, vec2};
     screens
@@ -152,6 +154,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn screen_under_pointer() {
         // a laptop with a wider screen up and to its left, the layout that broke the placement
         let two = [(0.0, 0.0, 1800.0, 1169.0), (-3360.0, -721.0, 3360.0, 1890.0)];
