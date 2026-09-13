@@ -168,7 +168,7 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
-CI runs those on Windows, macOS and Linux. A second workflow runs Semgrep, Trivy,
+CI runs those on Windows, macOS and Linux. A second workflow runs Semgrep,
 cargo-deny and Gitleaks on every push and every Monday, with findings in the repository's
 Security tab; `cargo deny check` runs the same advisory and licence checks
 locally.
