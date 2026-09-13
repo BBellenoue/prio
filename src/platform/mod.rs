@@ -109,6 +109,14 @@ pub fn hotkey_label(key: eframe::egui::Key, mods: eframe::egui::Modifiers) -> Op
     parse_hotkey(&label).map(|_| label)
 }
 
+/// The screen carrying the origin, in egui points: the fallback when the one under the
+/// pointer cannot be named.
+pub fn origin_screen(ctx: &eframe::egui::Context) -> eframe::egui::Rect {
+    use eframe::egui::{Pos2, Rect, vec2};
+    let size = ctx.input(|i| i.viewport().monitor_size);
+    Rect::from_min_size(Pos2::ZERO, size.unwrap_or(vec2(1440.0, 900.0)))
+}
+
 /// The screen holding that point, among rectangles given as (x, y, width, height) in one
 /// unit. The first match wins: overlapping screens mirror the same place. Windows names its
 /// screen through the system rather than picking from a list.
