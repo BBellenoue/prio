@@ -90,40 +90,32 @@ fn vk(h: Hotkey) -> (u32, u32) {
     (m, code)
 }
 
-/// Posts a message to the resident's shortcut thread, ours or another process's.
-fn post_hotkey_thread(msg: u32) {
+/// Posts a message to the resident's shortcut thread, ours or another process's, whose id
+/// it publishes in %APPDATA%\prio\resident.tid. false when no resident answers.
+fn post_hotkey_thread(msg: u32, wparam: usize) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
-    if let Some(tid) = std::fs::read_to_string(path(TID_FILE))
+    std::fs::read_to_string(path(TID_FILE))
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok())
-    {
-        unsafe { PostThreadMessageW(tid, msg, 0, 0) };
-    }
+        .is_some_and(|tid| unsafe { PostThreadMessageW(tid, msg, wparam, 0) != 0 })
 }
 
 /// Asks the resident to read settings.json again and register its shortcuts anew.
 pub fn notify_hotkeys_changed() {
-    post_hotkey_thread(WM_RELOAD_HOTKEYS);
+    post_hotkey_thread(WM_RELOAD_HOTKEYS, 0);
 }
 
 /// Suspends the global shortcuts for the time of a capture: otherwise Windows catches the
 /// combination being pressed (Ctrl+Alt+A, say) and opens the window instead of leaving it
 /// to the panel.
 pub fn suspend_hotkeys() {
-    post_hotkey_thread(WM_SUSPEND_HOTKEYS);
+    post_hotkey_thread(WM_SUSPEND_HOTKEYS, 0);
 }
 
-/// Asks the running resident to show the list: a message posted to its shortcut thread,
-/// whose id it publishes in %APPDATA%\prio\resident.tid. false when no resident answers.
+/// Asks the running resident to show the list. false when no resident answers.
 pub fn wake_resident() -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_HOTKEY};
-    let Some(tid) = std::fs::read_to_string(path(TID_FILE))
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-    else {
-        return false;
-    };
-    unsafe { PostThreadMessageW(tid, WM_HOTKEY, HK_LIST, 0) != 0 }
+    use windows_sys::Win32::UI::WindowsAndMessaging::WM_HOTKEY;
+    post_hotkey_thread(WM_HOTKEY, HK_LIST)
 }
 
 /// (Re)registers both shortcuts from settings.json. Returns false when NEITHER could be taken
