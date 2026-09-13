@@ -1019,9 +1019,9 @@ fn name_chips(ui: &mut egui::Ui, names: &[String], typed: &str) -> Option<String
     pick
 }
 
-/// The suffix that would complete `text` (or its last comma-separated segment when `multi`)
-/// with the first candidate that starts the same way, case insensitive.
-fn completion(text: &str, candidates: &[String], multi: bool) -> Option<String> {
+/// The first candidate starting like `text` (or its last comma-separated segment when
+/// `multi`), case insensitive: the suffix that would complete the input, and the candidate.
+fn completion(text: &str, candidates: &[String], multi: bool) -> Option<(String, String)> {
     let seg = if multi { text.rsplit(',').next().unwrap_or("") } else { text }.trim_start();
     if seg.is_empty() {
         return None;
@@ -1030,7 +1030,7 @@ fn completion(text: &str, candidates: &[String], multi: bool) -> Option<String> 
     candidates
         .iter()
         .find(|c| c.to_lowercase().starts_with(&low) && c.to_lowercase() != low)
-        .map(|c| c.chars().skip(seg.chars().count()).collect())
+        .map(|c| (c.chars().skip(seg.chars().count()).collect(), c.clone()))
 }
 
 /// Text field with a ghost completion: the suggested suffix shows greyed after the input and
@@ -1049,29 +1049,11 @@ fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32
     let focused = out.response.has_focus();
     let mut sugg = completion(text, candidates, multi);
     if had && focused && ui.input(|i| i.key_pressed(egui::Key::Tab)) {
-        if sugg.take().is_some() {
-            // replace the typed segment with the candidate's canonical form ("cl" -> "Client")
-            let seg_chars = if multi {
-                text.rsplit(',').next().unwrap_or("")
-            } else {
-                text.as_str()
-            }
-            .trim_start()
-            .chars()
-            .count();
-            let low = text
-                .chars()
-                .rev()
-                .take(seg_chars)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect::<String>()
-                .to_lowercase();
-            if let Some(full) = candidates.iter().find(|c| c.to_lowercase().starts_with(&low)).cloned() {
-                let keep = text.chars().count() - seg_chars;
-                *text = text.chars().take(keep).collect::<String>() + &full;
-            }
+        if let Some((suffix, full)) = sugg.take() {
+            // the typed segment takes the candidate's canonical form ("cl" -> "Client")
+            let seg_chars = full.chars().count() - suffix.chars().count();
+            let keep = text.chars().count() - seg_chars;
+            *text = text.chars().take(keep).collect::<String>() + &full;
             if multi {
                 text.push_str(", "); // ready for the next tag
             }
@@ -1082,7 +1064,7 @@ fn complete_field(ui: &mut egui::Ui, text: &mut String, hint_s: &str, width: f32
                 .set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(text.chars().count()))));
             state.store(ui.ctx(), out.response.id);
         }
-    } else if focused && let Some(suf) = &sugg {
+    } else if focused && let Some((suf, _)) = &sugg {
         let font = egui::TextStyle::Body.resolve(ui.style());
         let at = out.galley_pos + vec2(out.galley.size().x, 0.0);
         ui.painter()
@@ -2401,10 +2383,11 @@ mod tests {
     #[test]
     fn completion_suffix() {
         let names: Vec<String> = ["Anne Sophie", "BK", "Client"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(completion("an", &names, false), Some("ne Sophie".into()));
+        let pair = |s: &str, f: &str| Some((s.to_string(), f.to_string()));
+        assert_eq!(completion("an", &names, false), pair("ne Sophie", "Anne Sophie"));
         assert_eq!(completion("BK", &names, false), None);
         assert_eq!(completion("", &names, false), None);
-        assert_eq!(completion("rh, cl", &names, true), Some("ient".into()));
+        assert_eq!(completion("rh, cl", &names, true), pair("ient", "Client"));
         assert_eq!(completion("rh,", &names, true), None);
     }
 
