@@ -1,8 +1,8 @@
 name: Release
 
-# A tag v* publishes prio.exe and the macOS build (plus their install scripts)
-# as a GitHub Release. Uses the gh CLI shipped with the runner rather than a
-# third-party action.
+# A tag v* publishes the Windows, macOS and Linux builds (plus their install
+# scripts) as a GitHub Release. Uses the gh CLI shipped with the runner rather
+# than a third-party action.
 on:
   push:
     tags: ["v*"]
@@ -82,3 +82,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: gh release upload "$TAG" "prio-$TAG-macos-universal.zip"
+
+  linux:
+    name: Build and publish the Linux binary
+    needs: create
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # gtk and appindicator for the tray icon, xdo for its menu, xkbcommon-x11 for winit.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev libxkbcommon-x11-dev
+
+      - name: Build
+        run: |
+          cargo build --release
+          mkdir dist
+          cp target/release/prio install-linux.sh dist/
+
+      # tar rather than zip: it keeps the executable bit, which the install script needs.
+      - name: Archive
+        env:
+          TAG: ${{ github.ref_name }}
+        run: tar -czf "prio-$TAG-linux-x64.tar.gz" -C dist prio install-linux.sh
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" "prio-$TAG-linux-x64.tar.gz"

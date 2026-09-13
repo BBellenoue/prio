@@ -89,8 +89,10 @@ for itself, and the two global shortcuts are the whole point.
 
 Without a toolchain: download the archive for your system from the latest
 [release](https://github.com/BBellenoue/prio/releases), unpack it anywhere
-permanent, and run `install-shortcuts.ps1` or `install-macos.sh` from that
-folder.
+permanent, and run `install-shortcuts.ps1`, `install-macos.sh` or
+`install-linux.sh` from that folder. The Linux archive is built on the current
+Ubuntu, so it wants glibc 2.39 or newer; on an older distribution, build from
+source.
 
 From source, with a [Rust](https://rustup.rs) toolchain:
 
