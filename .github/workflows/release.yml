@@ -1,0 +1,32 @@
+name: Release
+
+# A tag v* publishes prio.exe (plus the install script) as a GitHub Release.
+# Uses the gh CLI shipped with the runner rather than a third-party action.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish prio.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Zip
+        run: Compress-Archive -Path target\release\prio.exe, install-shortcuts.ps1 -DestinationPath prio-${{ github.ref_name }}-windows-x64.zip
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create ${{ github.ref_name }} prio-${{ github.ref_name }}-windows-x64.zip --generate-notes
