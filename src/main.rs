@@ -299,12 +299,9 @@ enum Level {
 impl Level {
     const ALL: [Level; 3] = [Level::High, Level::Mid, Level::Low];
 
+    /// The variants are declared in rank order.
     fn rank(self) -> usize {
-        match self {
-            Level::High => 0,
-            Level::Mid => 1,
-            Level::Low => 2,
-        }
+        self as usize
     }
 
     fn label(self) -> &'static str {
@@ -338,12 +335,9 @@ impl Effort {
         }
     }
 
+    /// One bar per step, the variants are declared in growing order.
     fn bars(self) -> usize {
-        match self {
-            Effort::Quick => 1,
-            Effort::Hours => 2,
-            Effort::Day => 3,
-        }
+        self as usize + 1
     }
 }
 
@@ -2416,6 +2410,7 @@ mod tests {
 
     #[test]
     fn levels() {
+        assert_eq!(Level::ALL.map(Level::rank), [0, 1, 2]);
         let mk = |level: Level, waiting: &str, title: &str| Task {
             level,
             waiting: waiting.into(),
@@ -2479,6 +2474,7 @@ mod tests {
 
     #[test]
     fn efforts() {
+        assert_eq!(Effort::ALL.map(Effort::bars), [1, 2, 3]);
         let mk = |effort: Effort| Task {
             effort,
             ..Default::default()
