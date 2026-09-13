@@ -1,5 +1,5 @@
-//! Backend macOS: raccourcis globaux Carbon (crate global-hotkey), barre de menus,
-//! ~/Library/Application Support, socket unix pour joindre le resident.
+//! macOS backend: Carbon global shortcuts (the global-hotkey crate), the menu bar,
+//! ~/Library/Application Support, and a unix socket to reach the resident.
 
 use super::{HK_ADD, HK_ADD_FAILED, HK_LIST, HK_LIST_FAILED, HK_QUIT, Hotkey, HotkeyKey};
 use crate::{dbg_log, load_settings, logo_rgba, path};
@@ -30,10 +30,10 @@ const SOCK_FILE: &str = "prio.sock";
 const CMD_RELOAD: usize = 1;
 const CMD_SUSPEND: usize = 2;
 
-/// Commandes recues sur la socket, appliquees par `Runtime::tick`: Carbon veut le thread
-/// principal pour (des)enregistrer un raccourci.
+/// Commands received on the socket, applied by `Runtime::tick`: Carbon wants the main
+/// thread to register or unregister a shortcut.
 static CMD: AtomicUsize = AtomicUsize::new(0);
-/// Identifiants global-hotkey des deux raccourcis courants, pour l'ajout et pour la liste.
+/// global-hotkey ids of the two current shortcuts, capture first, list second.
 static IDS: Mutex<[u32; 2]> = Mutex::new([0, 0]);
 
 pub fn data_dir() -> PathBuf {
@@ -47,13 +47,13 @@ pub fn today() -> (i32, u32, u32) {
     (tm.tm_year + 1900, tm.tm_mon as u32 + 1, tm.tm_mday as u32)
 }
 
-/// Taille de l'ecran principal, en points egui.
+/// Size of the main screen, in egui points.
 pub fn screen_points(ctx: &egui::Context) -> (f32, f32) {
     let size = ctx.input(|i| i.viewport().monitor_size);
     size.map(|s| (s.x, s.y)).unwrap_or((1440.0, 900.0))
 }
 
-/// Raccourci global-hotkey correspondant.
+/// The matching global-hotkey shortcut.
 fn hotkey(h: Hotkey) -> Option<HotKey> {
     let mut m = Modifiers::empty();
     if h.ctrl {
@@ -83,24 +83,24 @@ fn send(cmd: &str) -> bool {
         .is_ok()
 }
 
-/// Demande au resident de relire settings.json et de re-enregistrer ses raccourcis.
+/// Asks the resident to read settings.json again and register its shortcuts anew.
 pub fn notify_hotkeys_changed() {
     send("reload\n");
 }
 
-/// Suspend les raccourcis globaux le temps d'une saisie: sinon la combinaison en cours
-/// (ex. Cmd+Alt+A) ouvre la fenetre au lieu de rester au panneau.
+/// Suspends the global shortcuts for the time of a capture: otherwise the combination being
+/// pressed (Cmd+Alt+A, say) opens the window instead of staying with the panel.
 pub fn suspend_hotkeys() {
     send("suspend\n");
 }
 
-/// Demande au resident existant d'afficher la liste. false si aucun resident joignable.
+/// Asks the running resident to show the list. false when no resident answers.
 pub fn wake_resident() -> bool {
     send("list\n")
 }
 
-/// Ouvre la socket du resident: c'est elle qui fait l'instance unique. false: un autre
-/// resident repond deja dessus.
+/// Opens the resident's socket, which is what makes the instance unique. false: another
+/// resident already answers on it.
 pub fn start_resident(ctx: Arc<OnceLock<egui::Context>>, flag: Arc<AtomicUsize>, _: Arc<AtomicUsize>) -> bool {
     let sock = path(SOCK_FILE);
     let listener = match UnixListener::bind(&sock) {
@@ -109,7 +109,7 @@ pub fn start_resident(ctx: Arc<OnceLock<egui::Context>>, flag: Arc<AtomicUsize>,
             if UnixStream::connect(&sock).is_ok() {
                 return false;
             }
-            // socket laissee par un resident mort
+            // socket left behind by a dead resident
             let _ = std::fs::remove_file(&sock);
             match UnixListener::bind(&sock) {
                 Ok(l) => l,
@@ -128,7 +128,7 @@ pub fn start_resident(ctx: Arc<OnceLock<egui::Context>>, flag: Arc<AtomicUsize>,
             }
             let cmd = line.trim();
             if cmd.is_empty() {
-                continue; // sonde d'instance unique: elle se connecte sans rien ecrire
+                continue; // the single-instance probe: it connects without writing anything
             }
             dbg_log(&format!("socket: {cmd}"));
             match cmd {
@@ -149,12 +149,12 @@ pub fn start_resident(ctx: Arc<OnceLock<egui::Context>>, flag: Arc<AtomicUsize>,
     true
 }
 
-/// Raccourcis globaux et icone de barre de menus. Carbon et AppKit exigent le thread
-/// principal: construits dans la closure de creation d'eframe, pilotes par `tick`.
+/// Global shortcuts and the menu bar icon. Carbon and AppKit demand the main thread: both
+/// are built in eframe's creation closure and driven by `tick`.
 pub struct Runtime {
     manager: Option<GlobalHotKeyManager>,
     tray: Option<TrayIcon>,
-    menu: Option<(MenuItem, MenuItem)>, // liste, ajout
+    menu: Option<(MenuItem, MenuItem)>, // list, capture
     registered: Vec<HotKey>,
     status: Arc<AtomicUsize>,
 }
@@ -194,12 +194,12 @@ impl Runtime {
         rt
     }
 
-    /// Applique les commandes arrivees sur la socket.
+    /// Applies the commands that arrived on the socket.
     pub fn tick(&mut self) {
         let cmd = CMD.swap(0, SeqCst);
         if cmd & CMD_SUSPEND != 0 {
             self.unregister();
-            dbg_log("raccourcis suspendus (saisie en cours)");
+            dbg_log("shortcuts suspended (capture in progress)");
         }
         if cmd & CMD_RELOAD != 0 {
             self.reload();
@@ -215,7 +215,7 @@ impl Runtime {
         *IDS.lock().unwrap() = [0, 0];
     }
 
-    /// (Re)enregistre les deux raccourcis d'apres settings.json, et met a jour le menu.
+    /// (Re)registers both shortcuts from settings.json, and updates the menu.
     fn reload(&mut self) {
         self.unregister();
         let s = load_settings();
@@ -235,7 +235,10 @@ impl Runtime {
         }
         *IDS.lock().unwrap() = ids;
         self.status.store(bits, SeqCst);
-        dbg_log(&format!("register_hotkeys {:?}/{:?} -> echecs={bits}", s.hotkey_add, s.hotkey_list));
+        dbg_log(&format!(
+            "register_hotkeys {:?}/{:?} -> failures={bits}",
+            s.hotkey_add, s.hotkey_list
+        ));
         if let Some((m_list, m_add)) = &self.menu {
             m_list.set_text(format!("Prio\t{}", s.hotkey_list));
             m_add.set_text(format!("Ajouter\t{}", s.hotkey_add));
@@ -246,8 +249,8 @@ impl Runtime {
     }
 }
 
-/// Thread de reveil: les evenements arrivent sur des canaux globaux, l'interface est
-/// repeinte a la demande.
+/// The waking thread: events arrive on global channels, the interface is repainted on
+/// demand.
 fn pump(
     (id_list, id_add, id_quit): (tray_icon::menu::MenuId, tray_icon::menu::MenuId, tray_icon::menu::MenuId),
     ctx: Arc<OnceLock<egui::Context>>,
@@ -296,11 +299,11 @@ fn pump(
     }
 }
 
-/// Icone de barre de menus: une image template ne garde que l'alpha, donc les barres du
-/// logo deviennent des trous et la teinte suit le theme du systeme.
+/// Menu bar icon: a template image keeps only the alpha, so the bars of the logo become
+/// holes and the tint follows the system appearance.
 fn template_rgba() -> Vec<u8> {
     let mut px = logo_rgba(32);
-    for p in px.chunks_exact_mut(4) {
+    for p in px.as_chunks_mut::<4>().0 {
         if p[0] < 0x40 {
             p[3] = 0;
         }
@@ -309,8 +312,8 @@ fn template_rgba() -> Vec<u8> {
     px
 }
 
-/// Sans icone dans le Dock, une fenetre ouverte par un raccourci n'a pas le focus, et NSApp
-/// ignore la demande tant qu'elle n'est pas affichee: on insiste sur les premieres passes.
+/// Without a Dock icon, a window opened by a shortcut does not get the keyboard, and NSApp
+/// ignores the request until it is on screen: keep asking over the first few passes.
 pub fn activate(ctx: &egui::Context) {
     if ctx.cumulative_pass_nr() < 10 && !ctx.input(|i| i.viewport().focused.unwrap_or(false)) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -318,7 +321,7 @@ pub fn activate(ctx: &egui::Context) {
     }
 }
 
-/// Application de barre de menus: pas d'icone dans le Dock, pas de bascule Cmd+Tab.
+/// A menu bar application: no Dock icon, no Cmd+Tab entry.
 pub fn configure(opts: &mut eframe::NativeOptions) {
     use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
     opts.event_loop_builder = Some(Box::new(|b| {

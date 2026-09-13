@@ -1,5 +1,5 @@
-//! Ce qui depend du systeme: dossier de donnees, date locale, polices, taille d'ecran,
-//! raccourcis globaux, icone de zone de notification, reveil du resident.
+//! What depends on the system: data folder, local date, fonts, screen size, global
+//! shortcuts, notification area or menu bar icon, and how the resident is woken.
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -14,12 +14,12 @@ pub use win::*;
 pub const HK_ADD: usize = 1;
 pub const HK_LIST: usize = 2;
 pub const HK_QUIT: usize = 3;
-pub const HK_ADD_FAILED: usize = 1; // bits de hk_status
+pub const HK_ADD_FAILED: usize = 1; // bits of hk_status
 pub const HK_LIST_FAILED: usize = 2;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum HotkeyKey {
-    Alnum(u8), // 'A' a 'Z' ou '0' a '9'
+    Alnum(u8), // 'A' to 'Z' or '0' to '9'
     Function(u32),
     Space,
 }
@@ -29,12 +29,12 @@ pub struct Hotkey {
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
-    pub meta: bool, // touche Windows ou Commande
+    pub meta: bool, // the Windows or Command key
     pub key: HotkeyKey,
 }
 
-/// "Ctrl+Alt+A" -> combinaison neutre, que chaque backend traduit ensuite dans ses propres
-/// codes. Au moins un modificateur fort, puis une lettre, un chiffre, F1 a F24 ou Espace.
+/// "Ctrl+Alt+A" -> a neutral combination, which each backend then translates into its own
+/// codes. At least one strong modifier, then a letter, a digit, F1 to F24 or Space.
 pub fn parse_hotkey(spec: &str) -> Option<Hotkey> {
     let parts: Vec<&str> = spec.split('+').map(str::trim).filter(|p| !p.is_empty()).collect();
     let (key, mods) = parts.split_last()?;
@@ -55,7 +55,7 @@ pub fn parse_hotkey(spec: &str) -> Option<Hotkey> {
         }
     }
     if !strong_mods(h) {
-        return None; // Shift seul: trop facile a declencher par accident
+        return None; // Shift alone: too easy to trigger by accident
     }
     let k = key.to_ascii_uppercase();
     h.key = match k.as_str() {
@@ -70,7 +70,7 @@ pub fn parse_hotkey(spec: &str) -> Option<Hotkey> {
     Some(h)
 }
 
-/// Windows reserve Win+lettre a son shell ; macOS laisse Commande aux applications.
+/// Windows keeps Win+letter for its shell; macOS leaves Command to applications.
 fn strong_mods(h: Hotkey) -> bool {
     if cfg!(target_os = "macos") {
         h.ctrl || h.alt || h.meta
@@ -79,8 +79,8 @@ fn strong_mods(h: Hotkey) -> bool {
     }
 }
 
-/// Libelle "Ctrl+Alt+A" a partir d'une touche egui et de ses modificateurs, si la combinaison
-/// est valable. `mac_cmd` est toujours faux hors macOS.
+/// The "Ctrl+Alt+A" label for an egui key and its modifiers, when the combination is valid.
+/// `mac_cmd` is always false off macOS.
 pub fn hotkey_label(key: eframe::egui::Key, mods: eframe::egui::Modifiers) -> Option<String> {
     let mut parts = Vec::new();
     if mods.mac_cmd {

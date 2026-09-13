@@ -1,4 +1,4 @@
-//! Backend Windows: Win32 (raccourcis globaux et boucle de messages), %APPDATA%, Segoe UI.
+//! Windows backend: Win32 (global shortcuts and a message loop), %APPDATA%, Segoe UI.
 
 use super::{HK_ADD, HK_ADD_FAILED, HK_LIST, HK_LIST_FAILED, HK_QUIT, Hotkey, HotkeyKey};
 use crate::{dbg_log, load_settings, logo_rgba, path};
@@ -16,8 +16,8 @@ pub const FONT_REGULAR: &[(&str, u32)] = &[(r"C:\Windows\Fonts\segoeui.ttf", 0)]
 pub const FONT_SEMIBOLD: &[(&str, u32)] = &[(r"C:\Windows\Fonts\seguisb.ttf", 0)];
 
 const TID_FILE: &str = "resident.tid";
-const WM_RELOAD_HOTKEYS: u32 = 0x8001; // WM_APP + 1, poste au thread des raccourcis
-const WM_SUSPEND_HOTKEYS: u32 = 0x8002; // WM_APP + 2: desenregistre le temps d'une saisie
+const WM_RELOAD_HOTKEYS: u32 = 0x8001; // WM_APP + 1, posted to the shortcut thread
+const WM_SUSPEND_HOTKEYS: u32 = 0x8002; // WM_APP + 2: unregisters for the time of a capture
 
 pub fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("prio")
@@ -30,7 +30,7 @@ pub fn today() -> (i32, u32, u32) {
     (st.wYear as i32, st.wMonth as u32, st.wDay as u32)
 }
 
-/// Taille de l'ecran principal, en points egui.
+/// Size of the main screen, in egui points.
 pub fn screen_points(ctx: &egui::Context) -> (f32, f32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
     let ppp = ctx.pixels_per_point();
@@ -42,7 +42,7 @@ pub fn screen_points(ctx: &egui::Context) -> (f32, f32) {
     }
 }
 
-/// Modificateurs RegisterHotKey et code de touche virtuelle.
+/// RegisterHotKey modifiers and virtual key code.
 fn vk(h: Hotkey) -> (u32, u32) {
     let mut m = 0u32;
     if h.alt {
@@ -65,7 +65,7 @@ fn vk(h: Hotkey) -> (u32, u32) {
     (m, code)
 }
 
-/// Poste un message au thread des raccourcis du resident (le notre ou celui d'un autre process).
+/// Posts a message to the resident's shortcut thread, ours or another process's.
 fn post_hotkey_thread(msg: u32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
     if let Some(tid) = std::fs::read_to_string(path(TID_FILE))
@@ -76,19 +76,20 @@ fn post_hotkey_thread(msg: u32) {
     }
 }
 
-/// Demande au resident de relire settings.json et de re-enregistrer ses raccourcis.
+/// Asks the resident to read settings.json again and register its shortcuts anew.
 pub fn notify_hotkeys_changed() {
     post_hotkey_thread(WM_RELOAD_HOTKEYS);
 }
 
-/// Suspend les raccourcis globaux le temps d'une saisie: sinon Windows intercepte la
-/// combinaison en cours (ex. Ctrl+Alt+A) et ouvre la fenetre au lieu de la laisser au panneau.
+/// Suspends the global shortcuts for the time of a capture: otherwise Windows catches the
+/// combination being pressed (Ctrl+Alt+A, say) and opens the window instead of leaving it
+/// to the panel.
 pub fn suspend_hotkeys() {
     post_hotkey_thread(WM_SUSPEND_HOTKEYS);
 }
 
-/// Demande au resident existant d'afficher la liste: message poste a son thread de raccourcis,
-/// dont l'id est publie dans %APPDATA%\prio\resident.tid. false si aucun resident joignable.
+/// Asks the running resident to show the list: a message posted to its shortcut thread,
+/// whose id it publishes in %APPDATA%\prio\resident.tid. false when no resident answers.
 pub fn wake_resident() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_HOTKEY};
     let Some(tid) = std::fs::read_to_string(path(TID_FILE))
@@ -100,8 +101,8 @@ pub fn wake_resident() -> bool {
     unsafe { PostThreadMessageW(tid, WM_HOTKEY, HK_LIST, 0) != 0 }
 }
 
-/// (Re)enregistre les deux raccourcis d'apres settings.json. Renvoie false si AUCUN n'a pu l'etre
-/// (typiquement: un autre resident tourne). Les echecs individuels sont publies dans `status`.
+/// (Re)registers both shortcuts from settings.json. Returns false when NEITHER could be taken
+/// (typically: another resident is running). Individual failures are published in `status`.
 fn register_hotkeys(status: &AtomicUsize) -> bool {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey};
     let s = load_settings();
@@ -117,19 +118,22 @@ fn register_hotkeys(status: &AtomicUsize) -> bool {
         }
     }
     status.store(bits, SeqCst);
-    dbg_log(&format!("register_hotkeys {:?}/{:?} -> echecs={bits}", s.hotkey_add, s.hotkey_list));
+    dbg_log(&format!(
+        "register_hotkeys {:?}/{:?} -> failures={bits}",
+        s.hotkey_add, s.hotkey_list
+    ));
     bits != HK_ADD_FAILED | HK_LIST_FAILED
 }
 
-/// Prend les raccourcis globaux. false: un autre resident les tient deja.
+/// Takes the global shortcuts. false: another resident already holds them.
 pub fn start_resident(ctx: Arc<OnceLock<egui::Context>>, flag: Arc<AtomicUsize>, status: Arc<AtomicUsize>) -> bool {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || hotkey_loop(tx, ctx, flag, status));
     rx.recv().unwrap_or(false)
 }
 
-/// Raccourcis et icone de zone de notification vivent dans le thread de la boucle de messages
-/// (cf. `hotkey_loop`): rien a faire depuis l'interface.
+/// Shortcuts and the notification area icon live in the message loop thread (see
+/// `hotkey_loop`): nothing for the interface to do.
 pub struct Runtime;
 
 impl Runtime {
@@ -140,12 +144,12 @@ impl Runtime {
     pub fn tick(&mut self) {}
 }
 
-/// La fenetre qui vient d'apparaitre a deja le focus sous Windows.
+/// A window that has just appeared already has focus on Windows.
 pub fn activate(_: &egui::Context) {}
 
-/// Thread dedie: RegisterHotKey lie les raccourcis au thread appelant, et winit
-/// n'expose pas WM_HOTKEY. Heberge aussi l'icone de zone de notification (meme boucle
-/// de messages). Reveille l'UI via request_repaint quand un evenement tombe.
+/// A thread of its own: RegisterHotKey binds the shortcuts to the calling thread, and winit
+/// does not expose WM_HOTKEY. It also hosts the notification area icon (same message loop).
+/// Wakes the interface with request_repaint whenever an event lands.
 fn hotkey_loop(tx: std::sync::mpsc::Sender<bool>, ctx: Arc<OnceLock<egui::Context>>, flag: Arc<AtomicUsize>, status: Arc<AtomicUsize>) {
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -172,7 +176,7 @@ fn hotkey_loop(tx: std::sync::mpsc::Sender<bool>, ctx: Arc<OnceLock<egui::Contex
     if let Some(i) = icon {
         builder = builder.with_icon(i);
     }
-    let tray = builder.build(); // garde l'icone vivante jusqu'a la fin du thread
+    let tray = builder.build(); // keeps the icon alive until the thread ends
 
     let fire = |n: usize| {
         flag.store(n, SeqCst);
@@ -184,7 +188,7 @@ fn hotkey_loop(tx: std::sync::mpsc::Sender<bool>, ctx: Arc<OnceLock<egui::Contex
     loop {
         let r = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
         if r <= 0 {
-            dbg_log(&format!("hotkey_loop: GetMessageW={r} -> fin du thread"));
+            dbg_log(&format!("hotkey_loop: GetMessageW={r} -> thread ends"));
             break;
         }
         if msg.message == WM_HOTKEY {
@@ -197,7 +201,7 @@ fn hotkey_loop(tx: std::sync::mpsc::Sender<bool>, ctx: Arc<OnceLock<egui::Contex
                 UnregisterHotKey(std::ptr::null_mut(), HK_ADD as i32);
                 UnregisterHotKey(std::ptr::null_mut(), HK_LIST as i32);
             }
-            dbg_log("raccourcis suspendus (saisie en cours)");
+            dbg_log("shortcuts suspended (capture in progress)");
         }
         if msg.message == WM_RELOAD_HOTKEYS {
             register_hotkeys(&status);
@@ -207,7 +211,7 @@ fn hotkey_loop(tx: std::sync::mpsc::Sender<bool>, ctx: Arc<OnceLock<egui::Contex
             if let Ok(t) = &tray {
                 let _ = t.set_tooltip(Some(format!("Prio  ·  {}", s.hotkey_list)));
             }
-            fire(0); // rafraichit le panneau Reglages (etat des raccourcis)
+            fire(0); // refreshes the settings panel (shortcut state)
         }
         unsafe {
             TranslateMessage(&msg);
@@ -238,5 +242,5 @@ fn hotkey_loop(tx: std::sync::mpsc::Sender<bool>, ctx: Arc<OnceLock<egui::Contex
     }
 }
 
-/// Rien a regler cote fenetre: eframe suffit.
+/// Nothing to set on the window side: eframe is enough.
 pub fn configure(_: &mut eframe::NativeOptions) {}

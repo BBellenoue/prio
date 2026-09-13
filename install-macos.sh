@@ -1,11 +1,11 @@
 #!/bin/sh
-# Installe Prio en mode resident sur macOS:
-#  - Prio.app dans ~/Applications (bundle LSUIElement: barre de menus, pas d'icone dans le Dock),
-#    raccourcis globaux Cmd+Alt+A (ajouter) et Cmd+Alt+P (liste) ;
-#  - un agent de session qui le relance a l'ouverture de session.
+# Installs Prio as a resident on macOS:
+#  - Prio.app in ~/Applications (an LSUIElement bundle: menu bar, no Dock icon), with the
+#    Cmd+Alt+A (capture) and Cmd+Alt+P (list) global shortcuts;
+#  - a session agent that starts it again at login.
 set -eu
 
-# Depuis une archive de release, prio est a cote du script; depuis le depot, dans target/release.
+# From a release archive, prio sits next to the script; from the repository, in target/release.
 root=$(cd "$(dirname "$0")" && pwd)
 exe="$root/prio"
 [ -x "$exe" ] || exe="$root/target/release/prio"
@@ -13,7 +13,7 @@ app="$HOME/Applications/Prio.app"
 label="io.github.bbellenoue.prio"
 agent="$HOME/Library/LaunchAgents/$label.plist"
 
-[ -x "$exe" ] || { echo "construis d'abord: cargo build --release" >&2; exit 1; }
+[ -x "$exe" ] || { echo "build it first: cargo build --release" >&2; exit 1; }
 
 
 launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
@@ -37,9 +37,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-# Binaire non signe: sans cela Gatekeeper refuse ce qui vient d'une archive telechargee.
+# The binary is unsigned: without this, Gatekeeper refuses anything unpacked from a download.
 xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
-echo "installe: $app"
+echo "installed: $app"
 
 mkdir -p "$(dirname "$agent")"
 cat > "$agent" <<PLIST
@@ -55,5 +55,5 @@ cat > "$agent" <<PLIST
 </plist>
 PLIST
 launchctl bootstrap "gui/$(id -u)" "$agent"
-echo "agent de session: $agent"
-echo "Prio lance. Cmd+Alt+A ajouter, Cmd+Alt+P liste."
+echo "session agent: $agent"
+echo "Prio started. Cmd+Alt+A to capture, Cmd+Alt+P for the list."

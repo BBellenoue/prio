@@ -27,8 +27,8 @@ does it.
 - Standard library first, then a crate already in `Cargo.lock`, then a new one
   with a one-line justification in the commit body.
 - No assets: system fonts, icons drawn in code.
-- Comments explain a constraint or a non-obvious choice, in French, ASCII only
-  (no accents in comments; accents are fine in user-facing strings).
+- Code, comments and log strings in English, ASCII only. User-facing strings
+  stay in French, accents included: the interface is French.
 - Deliberate shortcuts carry a `ponytail:` comment naming the ceiling and the
   upgrade path.
 - System-specific code goes in `src/platform/{win,mac}.rs`, behind the same
