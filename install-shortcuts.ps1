@@ -2,9 +2,27 @@
 #  - started at login (the Startup folder), with no argument, so the resident process takes the
 #    Ctrl+Alt+A (capture) and Ctrl+Alt+P (list) global shortcuts and shows a notification icon;
 #  - a "Prio" shortcut in the Start menu (wakes the resident, or starts it when absent).
-# From a release zip, prio.exe sits next to the script; from the repository, in target\release.
+# From a release zip, prio.exe sits next to the script and is installed as it is; from the
+# repository, it is built first, in target\release. Building needs the resident stopped: it
+# holds a lock on the file it was started from.
 $exe = Join-Path $PSScriptRoot "prio.exe"
-if (-not (Test-Path $exe)) { $exe = Join-Path $PSScriptRoot "target\release\prio.exe" }
+$build = -not (Test-Path $exe)
+if ($build) {
+    $exe = Join-Path $PSScriptRoot "target\release\prio.exe"
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        Write-Error "no prio.exe next to the script, and no cargo to build one"
+        exit 1
+    }
+    Get-Process priority, prio -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Milliseconds 500
+    Push-Location $PSScriptRoot
+    cargo build --release
+    Pop-Location
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "cargo build --release failed: nothing installed, the resident is stopped"
+        exit 1
+    }
+}
 $menu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $startup = Join-Path $menu "Startup"
 $sh = New-Object -ComObject WScript.Shell
@@ -27,7 +45,7 @@ foreach ($s in @(
     Write-Host "created: $($s.Path)"
 }
 
-# Restart the resident on the new build.
+# Restart the resident on the new build (already stopped when the build ran).
 Get-Process priority, prio -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 Start-Process $exe
