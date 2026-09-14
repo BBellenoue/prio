@@ -1833,6 +1833,10 @@ impl List {
             // is then a drop target, and the only way to promote into an empty tier.
             let dragging = egui::DragAndDrop::has_any_payload(ui.ctx());
             let active = &mut self.store.active;
+            // The number follows the order on screen, not the index in the store: a card
+            // given another tier is renumbered at once, without waiting for the fold that
+            // reorders the store.
+            let mut rank = 0;
             for lvl in Level::ALL {
                 let idx: Vec<usize> = (0..active.len())
                     .filter(|&i| active[i].waiting.is_empty() && active[i].level == lvl && keep(&active[i]))
@@ -1842,10 +1846,11 @@ impl List {
                 }
                 heads[lvl.rank()] = section(ui, lvl.label(), idx.len(), head_color(lvl));
                 for &i in &idx {
+                    rank += 1;
                     let o = card(
                         ui,
                         i,
-                        Some(i + 1),
+                        Some(rank),
                         &mut active[i],
                         today,
                         open == Some((false, i)),
@@ -1872,10 +1877,11 @@ impl List {
             if !idx.is_empty() {
                 wait_top = section(ui, "En attente", idx.len(), MUTED);
                 for &i in &idx {
+                    rank += 1;
                     let o = card(
                         ui,
                         i,
-                        Some(i + 1),
+                        Some(rank),
                         &mut active[i],
                         today,
                         open == Some((false, i)),
