@@ -2225,7 +2225,10 @@ fn card(
                 t.tags = parse_tags(&tags_text);
                 out.changed = true;
             }
-            let mut wait = None;
+            // Filling this field moves the card to the "En attente" section, which pulls the
+            // input out from under the cursor and cuts the typing short. The draft lives in
+            // egui's memory while the field has focus and only reaches the task on the way out.
+            let wid = id.with("wait");
             if archived.is_none() {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("priorité").size(12.5).color(MUTED));
@@ -2243,16 +2246,30 @@ fn card(
                 });
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("⏳ en attente de").size(12.5).color(MUTED));
-                    wait = Some(complete_field(ui, &mut t.waiting, "nom", 180.0, names, false));
+                    let mut buf: String = ui.ctx().data(|d| d.get_temp(wid)).unwrap_or_else(|| t.waiting.clone());
+                    let r = complete_field(ui, &mut buf, "nom", 180.0, names, false);
+                    let focused = r.has_focus();
+                    if r.lost_focus() {
+                        if buf != t.waiting {
+                            t.waiting = buf;
+                            out.changed = true;
+                        }
+                        ui.ctx().data_mut(|d| d.remove_temp::<String>(wid));
+                    } else if focused {
+                        ui.ctx().data_mut(|d| d.insert_temp(wid, buf.clone()));
+                    }
                     if !t.waiting.is_empty() && text_button(ui, "Débloqué", GREEN) {
                         t.waiting.clear();
                         out.changed = true;
+                        ui.ctx().data_mut(|d| d.remove_temp::<String>(wid));
                     }
                 });
                 // the same people as the requesters: suggestion chips
                 if let Some(n) = name_chips(ui, names, &t.waiting) {
                     t.waiting = n;
                     out.changed = true;
+                    // a chip wins over a draft left in the field, which would land a frame later
+                    ui.ctx().data_mut(|d| d.remove_temp::<String>(wid));
                 }
             } else {
                 // The archive date can be corrected (a task finished yesterday, archived today).
@@ -2284,7 +2301,7 @@ fn card(
                     }
                 });
             }
-            if notes.changed() || wait.as_ref().is_some_and(|w| w.changed()) {
+            if notes.changed() {
                 out.changed = true;
             }
         }
