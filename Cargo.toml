@@ -1,6 +1,6 @@
 [package]
 name = "prio"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.90"
 description = "A small desktop app for keeping one ordered list of priorities: two global shortcuts, drag and drop, nothing else in the way"
