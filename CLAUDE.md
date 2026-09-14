@@ -11,7 +11,7 @@ before touching anything.
 ```powershell
 cargo fmt --check && cargo clippy -- -D warnings && cargo test
 cargo build --release
-.\install-shortcuts.ps1        # kills the resident, reinstalls shortcuts, restarts it
+.\install-shortcuts.ps1        # stops the resident, rebuilds, reinstalls shortcuts, restarts it
 ```
 
 ```sh

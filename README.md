@@ -108,12 +108,13 @@ source.
 From source, with a [Rust](https://rustup.rs) toolchain:
 
 ```powershell
-cargo build --release
 .\install-shortcuts.ps1
 ```
 
-The script puts a shortcut in the Startup folder (so Prio starts with your
-session, resident, no window), another in the Start menu, and launches it.
+The script builds the release binary (from the repository; from a release zip
+it takes the `prio.exe` next to it), puts a shortcut in the Startup folder (so
+Prio starts with your session, resident, no window), another in the Start menu,
+and launches it.
 
 ```sh
 cargo build --release
