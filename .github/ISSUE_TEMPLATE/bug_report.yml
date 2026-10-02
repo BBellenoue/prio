@@ -1,0 +1,44 @@
+name: Bug report
+description: Something does not behave the way it should
+labels: [bug]
+body:
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows
+        - macOS
+        - Linux (X11)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The release tag, or the commit you built from.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant lines of debug.log
+      description: >
+        Only when the resident is involved. Run with PRIO_DEBUG=1, the log is written next to
+        tasks.json. Remove task titles and any personal data before pasting.
+      render: text
+  - type: markdown
+    attributes:
+      value: For anything security-related, do not open an issue: follow SECURITY.md.
