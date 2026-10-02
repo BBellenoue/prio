@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a change to what Prio does
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What gets in your way today? Prio stays small on purpose, so the need matters more than the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+  - type: dropdown
+    id: systems
+    attributes:
+      label: Systems concerned
+      multiple: true
+      options:
+        - Windows
+        - macOS
+        - Linux (X11)
